@@ -4,10 +4,16 @@ import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.Resettable;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
 import io.github.hectorvent.floci.services.lambda.model.InvocationType;
+import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.sns.model.PlatformApplication;
+import io.github.hectorvent.floci.services.sns.model.PlatformEndpoint;
+import io.github.hectorvent.floci.services.sns.model.PushNotification;
+import io.github.hectorvent.floci.services.sns.model.SentSms;
 import io.github.hectorvent.floci.services.sns.model.Subscription;
 import io.github.hectorvent.floci.services.sns.model.Topic;
 import io.github.hectorvent.floci.services.sqs.SqsService;
@@ -34,24 +40,37 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 @ApplicationScoped
-public class SnsService {
+public class SnsService implements Resettable {
 
     private static final Logger LOG = Logger.getLogger(SnsService.class);
     private static final Duration FIFO_DEDUP_WINDOW = Duration.ofMinutes(5);
     private static final int MAX_PUBLISH_SIZE = 262_144;
+    private static final int PUSH_CAPTURE_LIMIT = 1000;
     private static final List<String> PENDING_CONFIRMATION_PROTOCOLS =
             List.of("http", "https", "email", "email-json", "sms");
+    /** Mobile-push platforms Floci mocks. iOS and Android only — anything else is rejected. */
+    private static final Set<String> SUPPORTED_PUSH_PLATFORMS = Set.of(
+            "APNS", "APNS_SANDBOX", "GCM", "FCM");
+    private static final java.util.regex.Pattern PLATFORM_APP_NAME_PATTERN =
+            java.util.regex.Pattern.compile("[a-zA-Z0-9_.\\-]{1,256}");
 
     private final StorageBackend<String, Topic> topicStore;
     private final StorageBackend<String, Subscription> subscriptionStore;
+    private final StorageBackend<String, PlatformApplication> platformAppStore;
+    private final StorageBackend<String, PlatformEndpoint> platformEndpointStore;
+    private final Deque<PushNotification> pushCapture = new ConcurrentLinkedDeque<>();
+    private final StorageBackend<String, SentSms> smsStore;
     private final RegionResolver regionResolver;
     private final SqsService sqsService;
     private final LambdaService lambdaService;
@@ -72,6 +91,15 @@ public class SnsService {
                 storageFactory.create("sns", "sns-subscriptions.json",
                         new TypeReference<Map<String, Subscription>>() {
                         }),
+                storageFactory.create("sns", "sns-platform-applications.json",
+                        new TypeReference<Map<String, PlatformApplication>>() {
+                        }),
+                storageFactory.create("sns", "sns-platform-endpoints.json",
+                        new TypeReference<Map<String, PlatformEndpoint>>() {
+                        }),
+                storageFactory.create("sns", "sns-sms.json",
+                        new TypeReference<Map<String, SentSms>>() {
+                        }),
                 regionResolver,
                 sqsService,
                 lambdaService,
@@ -87,8 +115,23 @@ public class SnsService {
                StorageBackend<String, Subscription> subscriptionStore,
                RegionResolver regionResolver, SqsService sqsService,
                LambdaService lambdaService) {
+        this(topicStore, subscriptionStore,
+                new InMemoryStorage<>(),
+                new InMemoryStorage<>(),
+                regionResolver, sqsService, lambdaService);
+    }
+
+    SnsService(StorageBackend<String, Topic> topicStore,
+               StorageBackend<String, Subscription> subscriptionStore,
+               StorageBackend<String, PlatformApplication> platformAppStore,
+               StorageBackend<String, PlatformEndpoint> platformEndpointStore,
+               RegionResolver regionResolver, SqsService sqsService,
+               LambdaService lambdaService) {
         this.topicStore = topicStore;
         this.subscriptionStore = subscriptionStore;
+        this.platformAppStore = platformAppStore;
+        this.platformEndpointStore = platformEndpointStore;
+        this.smsStore = new InMemoryStorage<>();
         this.regionResolver = regionResolver;
         this.sqsService = sqsService;
         this.lambdaService = lambdaService;
@@ -99,16 +142,27 @@ public class SnsService {
 
     SnsService(StorageBackend<String, Topic> topicStore,
                StorageBackend<String, Subscription> subscriptionStore,
+               StorageBackend<String, PlatformApplication> platformAppStore,
+               StorageBackend<String, PlatformEndpoint> platformEndpointStore,
+               StorageBackend<String, SentSms> smsStore,
                RegionResolver regionResolver, SqsService sqsService,
                LambdaService lambdaService, String baseUrl, ObjectMapper objectMapper) {
         this.topicStore = topicStore;
         this.subscriptionStore = subscriptionStore;
+        this.platformAppStore = platformAppStore;
+        this.platformEndpointStore = platformEndpointStore;
+        this.smsStore = smsStore;
         this.regionResolver = regionResolver;
         this.sqsService = sqsService;
         this.lambdaService = lambdaService;
         this.baseUrl = baseUrl;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    }
+
+    public void clear() {
+        pushCapture.clear();
+        fifoDeduplicationCache.clear();
     }
 
     public Topic createTopic(String name, Map<String, String> attributes,
@@ -301,6 +355,14 @@ public class SnsService {
     public String publish(String topicArn, String targetArn, String phoneNumber, String message,
                           String subject, Map<String, MessageAttributeValue> messageAttributes,
                           String messageGroupId, String messageDeduplicationId, String region) {
+        return publish(topicArn, targetArn, phoneNumber, message, subject, null,
+                messageAttributes, messageGroupId, messageDeduplicationId, region);
+    }
+
+    public String publish(String topicArn, String targetArn, String phoneNumber, String message,
+                          String subject, String messageStructure,
+                          Map<String, MessageAttributeValue> messageAttributes,
+                          String messageGroupId, String messageDeduplicationId, String region) {
         int messageBytes = message == null ? 0 : message.getBytes(StandardCharsets.UTF_8).length;
         int payloadSize = computePublishSize(messageBytes, subject, messageAttributes);
         if (payloadSize > MAX_PUBLISH_SIZE) {
@@ -310,7 +372,13 @@ public class SnsService {
 
         // Send SMS
         if (phoneNumber != null) {
-            return UUID.randomUUID().toString();
+            String messageId = UUID.randomUUID().toString();
+            String effectiveRegion = region != null ? region : "us-east-1";
+            SentSms sms = new SentSms(messageId, effectiveRegion, phoneNumber,
+                    message, subject, Instant.now());
+            smsStore.put("sms::" + effectiveRegion + "::" + messageId, sms);
+            LOG.infov("SNS SMS published: messageId={0} phone={1}", messageId, phoneNumber);
+            return messageId;
         }
 
         // Send a message to topic or directly to a target ARN
@@ -318,12 +386,23 @@ public class SnsService {
         if (effectiveArn == null) {
             throw new AwsException("InvalidParameter", "TopicArn or TargetArn is required.", 400);
         }
-        String topicStoreKey = topicKey(region, effectiveArn);
-        Topic topic = topicStore.get(topicStoreKey)
-                .orElseThrow(() -> new AwsException("NotFound", "Topic does not exist.", 404));
         if (message == null || message.isBlank()) {
             throw new AwsException("InvalidParameter", "Message is required.", 400);
         }
+
+        if (isEndpointArn(effectiveArn)) {
+            return publishToEndpoint(effectiveArn, message, subject, messageStructure,
+                    messageAttributes, region);
+        }
+        if (isPlatformApplicationArn(effectiveArn)) {
+            throw new AwsException("InvalidParameter",
+                    "Invalid parameter: TargetArn Reason: Cannot publish directly to a platform application ARN.",
+                    400);
+        }
+
+        String topicStoreKey = topicKey(region, effectiveArn);
+        Topic topic = topicStore.get(topicStoreKey)
+                .orElseThrow(() -> new AwsException("NotFound", "Topic does not exist.", 404));
 
         boolean isFifo = "true".equals(topic.getAttributes().get("FifoTopic"));
         String dedupId = messageDeduplicationId;
@@ -360,6 +439,287 @@ public class SnsService {
         }
         LOG.infov("Published message {0} to topic {1}", messageId, effectiveArn);
         return messageId;
+    }
+
+    // --- Mobile push (iOS / Android) ---
+
+    public PlatformApplication createPlatformApplication(String name, String platform,
+                                                          Map<String, String> attributes, String region) {
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameter", "Name is required.", 400);
+        }
+        if (!PLATFORM_APP_NAME_PATTERN.matcher(name).matches()) {
+            throw new AwsException("InvalidParameter",
+                    "Invalid parameter: Name Reason: must be made up of only uppercase and"
+                            + " lowercase ASCII letters, numbers, underscores, hyphens, and"
+                            + " periods, and must be between 1 and 256 characters long.",
+                    400);
+        }
+        if (platform == null || !SUPPORTED_PUSH_PLATFORMS.contains(platform)) {
+            throw new AwsException("InvalidParameter",
+                    "Invalid parameter: Platform Reason: Floci mocks only APNS, APNS_SANDBOX, GCM, and FCM.",
+                    400);
+        }
+        String arn = platformApplicationArn(region, platform, name);
+        String key = platformAppKey(region, arn);
+
+        PlatformApplication existing = platformAppStore.get(key).orElse(null);
+        if (existing != null) return existing;
+
+        PlatformApplication app = new PlatformApplication(name, arn, platform);
+        if (attributes != null) app.getAttributes().putAll(attributes);
+        platformAppStore.put(key, app);
+        LOG.infov("Created SNS platform application: {0} ({1}) in {2}", name, platform, region);
+        return app;
+    }
+
+    public void deletePlatformApplication(String arn, String region) {
+        String key = platformAppKey(region, arn);
+        if (platformAppStore.get(key).isEmpty()) {
+            return; // AWS treats DeletePlatformApplication as idempotent
+        }
+        String endpointPrefix = "endpoint::" + region + "::";
+        List<String> toDelete = new ArrayList<>();
+        for (String endpointKey : platformEndpointStore.keys()) {
+            if (!endpointKey.startsWith(endpointPrefix)) continue;
+            platformEndpointStore.get(endpointKey).ifPresent(ep -> {
+                if (arn.equals(ep.getPlatformApplicationArn())) toDelete.add(endpointKey);
+            });
+        }
+        toDelete.forEach(platformEndpointStore::delete);
+        platformAppStore.delete(key);
+        LOG.infov("Deleted SNS platform application: {0}", arn);
+    }
+
+    public Map<String, String> getPlatformApplicationAttributes(String arn, String region) {
+        String key = platformAppKey(region, arn);
+        PlatformApplication app = platformAppStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFound",
+                        "PlatformApplication does not exist.", 404));
+        return new java.util.LinkedHashMap<>(app.getAttributes());
+    }
+
+    public void setPlatformApplicationAttributes(String arn, Map<String, String> attributes, String region) {
+        String key = platformAppKey(region, arn);
+        PlatformApplication app = platformAppStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFound",
+                        "PlatformApplication does not exist.", 404));
+        if (attributes != null) app.getAttributes().putAll(attributes);
+        platformAppStore.put(key, app);
+    }
+
+    public List<PlatformApplication> listPlatformApplications(String region) {
+        String prefix = "app::" + region + "::";
+        return platformAppStore.scan(k -> k.startsWith(prefix));
+    }
+
+    public PlatformEndpoint createPlatformEndpoint(String platformApplicationArn, String token,
+                                                   String customUserData, Map<String, String> attributes,
+                                                   String region) {
+        if (token == null || token.isBlank()) {
+            throw new AwsException("InvalidParameter", "Token is required.", 400);
+        }
+        String appKey = platformAppKey(region, platformApplicationArn);
+        PlatformApplication app = platformAppStore.get(appKey)
+                .orElseThrow(() -> new AwsException("NotFound",
+                        "PlatformApplication does not exist.", 404));
+        if ("false".equalsIgnoreCase(app.getAttributes().get("Enabled"))) {
+            throw new AwsException("PlatformApplicationDisabled",
+                    "Platform application is disabled.", 400);
+        }
+
+        String endpointPrefix = "endpoint::" + region + "::";
+        for (String key : platformEndpointStore.keys()) {
+            if (!key.startsWith(endpointPrefix)) continue;
+            PlatformEndpoint existing = platformEndpointStore.get(key).orElse(null);
+            if (existing == null) continue;
+            if (!platformApplicationArn.equals(existing.getPlatformApplicationArn())) continue;
+            if (!token.equals(existing.getToken())) continue;
+            // AWS idempotency: same token + same attributes -> return existing; otherwise reject.
+            String existingUserData = existing.getAttributes().getOrDefault("CustomUserData", "");
+            String newUserData = customUserData != null ? customUserData : "";
+            boolean sameAttrs = existingUserData.equals(newUserData)
+                    && (attributes == null || matchesExistingAttributes(existing, attributes));
+            if (sameAttrs) return existing;
+            throw new AwsException("InvalidParameter",
+                    "Invalid parameter: Token Reason: Endpoint " + existing.getArn()
+                            + " already exists with the same Token, but different attributes.",
+                    400);
+        }
+
+        String endpointArn = platformEndpointArn(region, app.getPlatform(), app.getName());
+        PlatformEndpoint endpoint = new PlatformEndpoint(endpointArn, platformApplicationArn, token);
+        if (customUserData != null) endpoint.getAttributes().put("CustomUserData", customUserData);
+        if (attributes != null) endpoint.getAttributes().putAll(attributes);
+        if (isExpiredSentinelToken(token)) {
+            // Fast-path for tests: the token is "already expired" — AWS would normally only
+            // mark Enabled=false after an async APNS/FCM failure; Floci does it on create.
+            endpoint.getAttributes().put("Enabled", "false");
+            LOG.infov("Endpoint {0} created with Enabled=false (token matches expired sentinel)", endpointArn);
+        }
+        platformEndpointStore.put(endpointKey(region, endpointArn), endpoint);
+        LOG.infov("Created SNS platform endpoint: {0} for application {1}", endpointArn, platformApplicationArn);
+        return endpoint;
+    }
+
+    public void deleteEndpoint(String endpointArn, String region) {
+        // AWS treats DeleteEndpoint as idempotent — no error if missing.
+        platformEndpointStore.delete(endpointKey(region, endpointArn));
+        LOG.infov("Deleted SNS platform endpoint: {0}", endpointArn);
+    }
+
+    public Map<String, String> getEndpointAttributes(String endpointArn, String region) {
+        PlatformEndpoint endpoint = platformEndpointStore.get(endpointKey(region, endpointArn))
+                .orElseThrow(() -> new AwsException("NotFound", "Endpoint does not exist.", 404));
+        return new java.util.LinkedHashMap<>(endpoint.getAttributes());
+    }
+
+    public void setEndpointAttributes(String endpointArn, Map<String, String> attributes, String region) {
+        String key = endpointKey(region, endpointArn);
+        PlatformEndpoint endpoint = platformEndpointStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFound", "Endpoint does not exist.", 404));
+        if (attributes != null) {
+            endpoint.getAttributes().putAll(attributes);
+            String newToken = attributes.get("Token");
+            if (newToken != null) endpoint.setToken(newToken);
+        }
+        platformEndpointStore.put(key, endpoint);
+    }
+
+    public List<PlatformEndpoint> listEndpointsByPlatformApplication(String platformApplicationArn, String region) {
+        String prefix = "endpoint::" + region + "::";
+        List<PlatformEndpoint> result = new ArrayList<>();
+        for (String key : platformEndpointStore.keys()) {
+            if (!key.startsWith(prefix)) continue;
+            platformEndpointStore.get(key).ifPresent(ep -> {
+                if (platformApplicationArn.equals(ep.getPlatformApplicationArn())) result.add(ep);
+            });
+        }
+        return result;
+    }
+
+    /** Returns the most recent captured pushes (newest first), optionally filtered by endpoint ARN. */
+    public List<PushNotification> peekPushNotifications(String endpointArn) {
+        List<PushNotification> out = new ArrayList<>();
+        for (PushNotification p : pushCapture) {
+            if (endpointArn != null && !endpointArn.equals(p.endpointArn())) continue;
+            out.add(p);
+        }
+        return out;
+    }
+
+    public void clearPushNotifications() {
+        pushCapture.clear();
+    }
+
+    private String publishToEndpoint(String endpointArn, String message, String subject,
+                                     String messageStructure,
+                                     Map<String, MessageAttributeValue> messageAttributes,
+                                     String region) {
+        PlatformEndpoint endpoint = platformEndpointStore.get(endpointKey(region, endpointArn))
+                .orElseThrow(() -> new AwsException("NotFound", "Endpoint does not exist.", 404));
+        if (!"true".equalsIgnoreCase(endpoint.getAttributes().getOrDefault("Enabled", "true"))) {
+            throw new AwsException("EndpointDisabled",
+                    "Endpoint " + endpointArn + " disabled", 400);
+        }
+        PlatformApplication app = platformAppStore.get(platformAppKey(region, endpoint.getPlatformApplicationArn()))
+                .orElseThrow(() -> new AwsException("NotFound",
+                        "PlatformApplication does not exist.", 404));
+        if ("false".equalsIgnoreCase(app.getAttributes().get("Enabled"))) {
+            throw new AwsException("PlatformApplicationDisabled",
+                    "Platform application is disabled.", 400);
+        }
+        String payload = resolvePushPayload(app.getPlatform(), message, messageStructure);
+        String messageId = UUID.randomUUID().toString();
+        recordPushNotification(new PushNotification(
+                endpoint.getArn(), app.getArn(), app.getPlatform(), endpoint.getToken(),
+                payload, subject, messageAttributes, messageId, Instant.now()));
+        LOG.infov("Captured push notification {0} -> {1} ({2})", messageId, endpoint.getArn(), app.getPlatform());
+        return messageId;
+    }
+
+    /**
+     * Resolves the payload SNS would forward to APNS/FCM for this platform.
+     * If {@code messageStructure="json"}, pick the platform-specific key ({@code APNS},
+     * {@code APNS_SANDBOX}, {@code GCM}, {@code FCM}) from the JSON envelope, falling back
+     * to {@code default}. Otherwise return the raw message.
+     */
+    private String resolvePushPayload(String platform, String message, String messageStructure) {
+        if (messageStructure == null || !"json".equals(messageStructure)) {
+            return message;
+        }
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(message);
+        } catch (Exception e) {
+            throw new AwsException("InvalidParameter",
+                    "Invalid parameter: Message Reason: Message is not valid JSON.", 400);
+        }
+        if (!root.isObject()) {
+            throw new AwsException("InvalidParameter",
+                    "Invalid parameter: Message Reason: Messages must be a JSON object.",
+                    400);
+        }
+        JsonNode platformValue = root.get(platform);
+        if (platformValue != null && !platformValue.isNull()) {
+            return platformValue.isTextual() ? platformValue.asText() : platformValue.toString();
+        }
+        JsonNode defaultValue = root.get("default");
+        if (defaultValue != null && !defaultValue.isNull()) {
+            return defaultValue.isTextual() ? defaultValue.asText() : defaultValue.toString();
+        }
+        throw new AwsException("InvalidParameter",
+                "Invalid parameter: Message Reason: Messages must have a '" + platform
+                        + "' or 'default' key.",
+                400);
+    }
+
+    private void recordPushNotification(PushNotification notification) {
+        pushCapture.addFirst(notification);
+        while (pushCapture.size() > PUSH_CAPTURE_LIMIT) {
+            pushCapture.pollLast();
+        }
+    }
+
+    private boolean matchesExistingAttributes(PlatformEndpoint existing, Map<String, String> requested) {
+        for (Map.Entry<String, String> entry : requested.entrySet()) {
+            String existingValue = existing.getAttributes().get(entry.getKey());
+            if (existingValue == null) {
+                if (entry.getValue() != null && !entry.getValue().isEmpty()) return false;
+            } else if (!existingValue.equals(entry.getValue())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isExpiredSentinelToken(String token) {
+        return token != null && token.toUpperCase(java.util.Locale.ROOT).contains("EXPIRED");
+    }
+
+    private static boolean isEndpointArn(String arn) {
+        return arn != null && arn.contains(":endpoint/");
+    }
+
+    private static boolean isPlatformApplicationArn(String arn) {
+        return arn != null && arn.contains(":app/");
+    }
+
+    private String platformApplicationArn(String region, String platform, String name) {
+        return regionResolver.buildArn("sns", region, "app/" + platform + "/" + name);
+    }
+
+    private String platformEndpointArn(String region, String platform, String appName) {
+        return regionResolver.buildArn("sns", region,
+                "endpoint/" + platform + "/" + appName + "/" + UUID.randomUUID());
+    }
+
+    private static String platformAppKey(String region, String arn) {
+        return "app::" + region + "::" + arn;
+    }
+
+    private static String endpointKey(String region, String arn) {
+        return "endpoint::" + region + "::" + arn;
     }
 
     public Map<String, String> getSubscriptionAttributes(String subscriptionArn, String region) {
@@ -1162,5 +1522,20 @@ public class SnsService {
 
     private static String subKey(String region, String subscriptionArn) {
         return "sub::" + region + "::" + subscriptionArn;
+    }
+
+    /** All SMS messages published since last clear. Used by SnsInspectionController. */
+    public List<SentSms> getSentMessages() {
+        return smsStore.scan(k -> k.startsWith("sms::"));
+    }
+
+    /** Drop all stored SMS records. Used by SnsInspectionController. */
+    public void clearSentMessages() {
+        for (String key : smsStore.keys()) {
+            if (key.startsWith("sms::")) {
+                smsStore.delete(key);
+            }
+        }
+        LOG.info("Cleared all SNS SMS records");
     }
 }

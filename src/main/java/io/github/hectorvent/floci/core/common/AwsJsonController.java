@@ -1,7 +1,11 @@
 package io.github.hectorvent.floci.core.common;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
+import io.github.hectorvent.floci.services.cloudcontrol.CloudControlJsonHandler;
 import io.github.hectorvent.floci.services.cloudwatch.metrics.CloudWatchMetricsJsonHandler;
 import io.github.hectorvent.floci.services.dynamodb.DynamoDbJsonHandler;
 import io.github.hectorvent.floci.services.dynamodb.DynamoDbResponses;
@@ -27,9 +31,11 @@ import org.jboss.logging.Logger;
 @Path("/")
 public class AwsJsonController {
 
+    public static final String CONTENT_TYPE_AWS_JSON_1_0 = "application/x-amz-json-1.0";
     private static final Logger LOG = Logger.getLogger(AwsJsonController.class);
 
     private final ObjectMapper objectMapper;
+    private final ObjectReader strictBodyReader;
     private final ResolvedServiceCatalog catalog;
     private final RegionResolver regionResolver;
     private final DynamoDbJsonHandler dynamoDbJsonHandler;
@@ -38,6 +44,7 @@ public class AwsJsonController {
     private final SnsJsonHandler snsJsonHandler;
     private final StepFunctionsJsonHandler sfnJsonHandler;
     private final CloudWatchMetricsJsonHandler cloudWatchMetricsJsonHandler;
+    private final CloudControlJsonHandler cloudControlJsonHandler;
 
     @Inject
     public AwsJsonController(ObjectMapper objectMapper, ResolvedServiceCatalog catalog,
@@ -46,8 +53,10 @@ public class AwsJsonController {
                              DynamoDbStreamsJsonHandler dynamoDbStreamsJsonHandler,
                              SqsJsonHandler sqsJsonHandler, SnsJsonHandler snsJsonHandler,
                              StepFunctionsJsonHandler sfnJsonHandler,
-                             CloudWatchMetricsJsonHandler cloudWatchMetricsJsonHandler) {
+                             CloudWatchMetricsJsonHandler cloudWatchMetricsJsonHandler,
+                             CloudControlJsonHandler cloudControlJsonHandler) {
         this.objectMapper = objectMapper;
+        this.strictBodyReader = objectMapper.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
         this.catalog = catalog;
         this.regionResolver = regionResolver;
         this.dynamoDbJsonHandler = dynamoDbJsonHandler;
@@ -56,11 +65,12 @@ public class AwsJsonController {
         this.snsJsonHandler = snsJsonHandler;
         this.sfnJsonHandler = sfnJsonHandler;
         this.cloudWatchMetricsJsonHandler = cloudWatchMetricsJsonHandler;
+        this.cloudControlJsonHandler = cloudControlJsonHandler;
     }
 
     @POST
-    @Consumes("application/x-amz-json-1.0")
-    @Produces("application/x-amz-json-1.0")
+    @Consumes(CONTENT_TYPE_AWS_JSON_1_0)
+    @Produces(CONTENT_TYPE_AWS_JSON_1_0)
     public Response handleJsonRequest(
             @HeaderParam("X-Amz-Target") String target,
             @Context HttpHeaders httpHeaders,
@@ -79,9 +89,15 @@ public class AwsJsonController {
         String action = targetMatch.action();
         LOG.debugv("{0} JSON action: {1}", serviceKey, action);
 
+        JsonNode request;
+        try {
+            request = strictBodyReader.readTree(body);
+        } catch (JsonProcessingException e) {
+            return JsonErrorResponseUtils.createSerializationErrorResponse();
+        }
+
         Response response;
         try {
-            JsonNode request = objectMapper.readTree(body);
             String region = regionResolver.resolveRegion(httpHeaders);
 
             response = switch (serviceKey) {
@@ -95,6 +111,7 @@ public class AwsJsonController {
                 case "sns" -> snsJsonHandler.handle(action, request, region);
                 case "states" -> sfnJsonHandler.handle(action, request, region);
                 case "monitoring" -> cloudWatchMetricsJsonHandler.handle(action, request, region);
+                case "cloudcontrol" -> cloudControlJsonHandler.handle(action, request, region);
                 default -> null;
             };
             // catalog.matchTarget is protocol-agnostic: a JSON 1.1 target

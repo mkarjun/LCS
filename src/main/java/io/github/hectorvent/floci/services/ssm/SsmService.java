@@ -7,6 +7,7 @@ import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.ssm.model.Parameter;
 import io.github.hectorvent.floci.services.ssm.model.ParameterHistory;
+import io.github.hectorvent.floci.services.ssm.model.PatchBaselineIdentity;
 import com.fasterxml.jackson.core.type.TypeReference;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -58,10 +59,6 @@ public class SsmService {
         this.regionResolver = regionResolver;
     }
 
-    public long putParameter(String name, String value, String type, String description, boolean overwrite) {
-        return putParameter(name, value, type, description, overwrite, regionResolver.getDefaultRegion());
-    }
-
     /**
      * Create or update a parameter.
      * Returns the version number.
@@ -91,19 +88,11 @@ public class SsmService {
         return version;
     }
 
-    public Parameter getParameter(String name) {
-        return getParameter(name, regionResolver.getDefaultRegion());
-    }
-
     public Parameter getParameter(String name, String region) {
         String storageKey = regionKey(region, name);
         return parameterStore.get(storageKey)
                 .orElseThrow(() -> new AwsException("ParameterNotFound",
                         "Parameter " + name + " not found.", 400));
-    }
-
-    public List<Parameter> getParameters(List<String> names) {
-        return getParameters(names, regionResolver.getDefaultRegion());
     }
 
     public List<Parameter> getParameters(List<String> names, String region) {
@@ -112,10 +101,6 @@ public class SsmService {
             parameterStore.get(regionKey(region, name)).ifPresent(result::add);
         }
         return result;
-    }
-
-    public List<Parameter> getParametersByPath(String path, boolean recursive) {
-        return getParametersByPath(path, recursive, regionResolver.getDefaultRegion());
     }
 
     public List<Parameter> getParametersByPath(String path, boolean recursive, String region) {
@@ -138,10 +123,6 @@ public class SsmService {
         });
     }
 
-    public void deleteParameter(String name) {
-        deleteParameter(name, regionResolver.getDefaultRegion());
-    }
-
     public void deleteParameter(String name, String region) {
         String storageKey = regionKey(region, name);
         if (parameterStore.get(storageKey).isEmpty()) {
@@ -151,10 +132,6 @@ public class SsmService {
         parameterStore.delete(storageKey);
         historyStore.delete(storageKey);
         LOG.infov("Deleted parameter: {0}", name);
-    }
-
-    public List<String> deleteParameters(List<String> names) {
-        return deleteParameters(names, regionResolver.getDefaultRegion());
     }
 
     public List<String> deleteParameters(List<String> names, String region) {
@@ -168,10 +145,6 @@ public class SsmService {
             }
         }
         return deleted;
-    }
-
-    public List<ParameterHistory> getParameterHistory(String name) {
-        return getParameterHistory(name, regionResolver.getDefaultRegion());
     }
 
     public List<ParameterHistory> getParameterHistory(String name, String region) {
@@ -267,6 +240,82 @@ public class SsmService {
             parameterStore.put(storageKey, param);
         }
         LOG.debugv("Removed tags from parameter: {0}", resourceId);
+    }
+
+    // ──────────────────────────── Patch Baselines ────────────────────────────
+    // AWS provides a fixed set of AWS-owned predefined patch baselines (one default per operating
+    // system). These are static reference data, not customer state, so they live in-memory only.
+
+    private static final List<PatchBaselineIdentity> PREDEFINED_BASELINES = buildPredefinedBaselines();
+
+    private static List<PatchBaselineIdentity> buildPredefinedBaselines() {
+        String[][] defs = {
+                {"WINDOWS", "AWS-DefaultPatchBaseline", "Windows"},
+                {"AMAZON_LINUX", "AWS-AmazonLinuxDefaultPatchBaseline", "Amazon Linux"},
+                {"AMAZON_LINUX_2", "AWS-AmazonLinux2DefaultPatchBaseline", "Amazon Linux 2"},
+                {"AMAZON_LINUX_2022", "AWS-AmazonLinux2022DefaultPatchBaseline", "Amazon Linux 2022"},
+                {"AMAZON_LINUX_2023", "AWS-AmazonLinux2023DefaultPatchBaseline", "Amazon Linux 2023"},
+                {"UBUNTU", "AWS-UbuntuDefaultPatchBaseline", "Ubuntu"},
+                {"REDHAT_ENTERPRISE_LINUX", "AWS-RedHatDefaultPatchBaseline", "Red Hat Enterprise Linux"},
+                {"SUSE", "AWS-SuseDefaultPatchBaseline", "SUSE Linux Enterprise Server"},
+                {"CENTOS", "AWS-CentOSDefaultPatchBaseline", "CentOS"},
+                {"ORACLE_LINUX", "AWS-OracleLinuxDefaultPatchBaseline", "Oracle Linux"},
+                {"DEBIAN", "AWS-DebianDefaultPatchBaseline", "Debian Server"},
+                {"MACOS", "AWS-MacOSDefaultPatchBaseline", "macOS"},
+                {"RASPBIAN", "AWS-RaspbianDefaultPatchBaseline", "Raspbian"},
+                {"ROCKY_LINUX", "AWS-RockyLinuxDefaultPatchBaseline", "Rocky Linux"},
+                {"ALMA_LINUX", "AWS-AlmaLinuxDefaultPatchBaseline", "AlmaLinux"},
+        };
+        List<PatchBaselineIdentity> baselines = new ArrayList<>();
+        for (String[] def : defs) {
+            String os = def[0];
+            String name = def[1];
+            String description = "Default Patch Baseline for " + def[2] + " Provided by AWS.";
+            baselines.add(new PatchBaselineIdentity(stableBaselineId(name), name, os, description, true));
+        }
+        return List.copyOf(baselines);
+    }
+
+    /** Deterministic AWS-style baseline id (pb-<17 hex>) derived from the baseline name. */
+    private static String stableBaselineId(String name) {
+        long h = 1125899906842597L;
+        for (int i = 0; i < name.length(); i++) {
+            h = 31 * h + name.charAt(i);
+        }
+        String hex = String.format("%016x", h & 0x0FFFFFFFFFFFFFFFL);
+        return "pb-0" + hex;
+    }
+
+    /**
+     * Return AWS-owned predefined patch baselines matching the given DescribePatchBaselines filters
+     * (supported keys: OWNER, OPERATING_SYSTEM, NAME_PREFIX). There are no customer-owned baselines.
+     */
+    public List<PatchBaselineIdentity> describePatchBaselines(Map<String, List<String>> filters) {
+        List<String> owners = filters.getOrDefault("OWNER", List.of());
+        // OWNER=Self matches only customer-owned baselines, of which there are none.
+        if (!owners.isEmpty() && !owners.contains("AWS") && !owners.contains("All")) {
+            return List.of();
+        }
+
+        List<String> operatingSystems = filters.getOrDefault("OPERATING_SYSTEM", List.of());
+        List<String> namePrefixes = filters.getOrDefault("NAME_PREFIX", List.of());
+
+        return PREDEFINED_BASELINES.stream()
+                .filter(b -> operatingSystems.isEmpty() || operatingSystems.contains(b.operatingSystem()))
+                .filter(b -> namePrefixes.isEmpty()
+                        || namePrefixes.stream().anyMatch(prefix -> b.baselineName().startsWith(prefix)))
+                .toList();
+    }
+
+    /** Return the default patch baseline id for an operating system (defaults to WINDOWS). */
+    public String getDefaultPatchBaseline(String operatingSystem) {
+        String os = (operatingSystem == null || operatingSystem.isBlank()) ? "WINDOWS" : operatingSystem;
+        return PREDEFINED_BASELINES.stream()
+                .filter(b -> b.operatingSystem().equals(os))
+                .findFirst()
+                .map(PatchBaselineIdentity::baselineId)
+                .orElseThrow(() -> new AwsException("DoesNotExistException",
+                        "No default patch baseline exists for operating system " + os, 400));
     }
 
     private static String regionKey(String region, String name) {

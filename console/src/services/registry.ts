@@ -18,6 +18,7 @@ import type { CatalogEntry } from "./catalog";
 export const IMPLEMENTED_SERVICES: Record<string, LazyExoticComponent<ComponentType>> = {
   s3: lazy(() => import("./s3/S3Routes")),
   ec2: lazy(() => import("./ec2/Ec2Routes")),
+  iam: lazy(() => import("./iam/IamRoutes")),
 };
 
 export function isImplemented(entry: CatalogEntry): boolean {

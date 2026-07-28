@@ -36,7 +36,7 @@ The block below mirrors `src/main/resources/application.yml`, it's the effective
 
 ```yaml
 floci:
-  max-request-size: 512              # Max HTTP request body size in MB
+  max-request-size: 2048             # Max HTTP request body size in MB
   base-url: "http://localhost:4566"  # Used to build response URLs (SQS QueueUrl, SNS endpoints, etc.)
   # hostname: ""                     # When set, overrides the host in base-url for multi-container Docker
   default-region: us-east-1
@@ -45,6 +45,16 @@ floci:
   storage:
     mode: memory                      # memory | persistent | hybrid | wal
     persistent-path: ./data
+    # EFS access-point emulation for the shared local Docker volumes that back ECS
+    # efsVolumeConfiguration mounts. All opt-in; with no overrides a shared volume is a plain
+    # named volume (root:root 0755), so existing behaviour is unchanged. See docs/services/ecs.md.
+    efs:
+      # owner-uid: 1001            # CreationInfo.OwnerUid (set together with owner-gid)
+      # owner-gid: 1001            # CreationInfo.OwnerGid (set together with owner-uid)
+      # root-permissions: "2775"   # CreationInfo.Permissions; 3-4 octal digits (4-digit carries setgid/sticky)
+      init-image: busybox:stable   # image for the one-off chown/chmod of the volume root
+      # mount-user: "1001:1001"    # PosixUser: run mounting containers as uid[:gid]
+      # mount-group-add: 2000      # supplementary gid added to mounting containers
     wal:
       compaction-interval-ms: 30000
     services:
@@ -101,7 +111,7 @@ floci:
     sqs:
       enabled: true
       default-visibility-timeout: 30         # Seconds
-      max-message-size: 262144               # Bytes (256 KB)
+      max-message-size: 1048576              # Bytes (1 MB)
       clear-fifo-deduplication-cache-on-purge: false  # When true, PurgeQueue clears SQS FIFO dedup and SNS FIFO topic dedup for topics subscribed to that queue
 
     s3:
@@ -141,6 +151,7 @@ floci:
     iam:
       enabled: true
       enforcement-enabled: false        # Set to true to enforce IAM policies on all requests
+      seed-deployer-principal: false    # Set to true to create a local floci-deployer admin principal
 
     elasticache:
       enabled: true
@@ -150,11 +161,16 @@ floci:
 
     rds:
       enabled: true
+      mock: false                             # true = clusters/instances created without Docker (useful for CI)
       proxy-base-port: 7001
       proxy-max-port: 7099
       default-postgres-image: "postgres:16-alpine"
       default-mysql-image: "mysql:8.0"
       default-mariadb-image: "mariadb:11"
+
+    rds-data:
+      enabled: true
+      transaction-ttl-seconds: 180
 
     eventbridge:
       enabled: true
@@ -216,6 +232,9 @@ floci:
       enabled: true
       mock: false                             # true = tasks go to RUNNING without Docker (useful for CI)
 
+    appsync:
+      enabled: true
+
     appconfig:
       enabled: true
 
@@ -252,10 +271,12 @@ All keys in this table are declared on `EmulatorConfig` and accept environment v
 | `FLOCI_DNS_EXTRA_SUFFIXES`                         | *(unset)*        | Comma-separated extra hostname suffixes the embedded DNS server resolves to Floci's container IP. E.g. `localhost.localstack.cloud,localhost.example.internal` |
 | `FLOCI_SERVICES_SSM_MAX_PARAMETER_HISTORY`         | `5`              | Max parameter versions kept                                   |
 | `FLOCI_SERVICES_SQS_DEFAULT_VISIBILITY_TIMEOUT`    | `30`             | Default visibility timeout (seconds)                          |
-| `FLOCI_SERVICES_SQS_MAX_MESSAGE_SIZE`              | `262144`         | Max message size (bytes)                                      |
+| `FLOCI_SERVICES_SQS_MAX_MESSAGE_SIZE`              | `1048576`        | Max message size (bytes)                                      |
 | `FLOCI_SERVICES_SQS_CLEAR_FIFO_DEDUPLICATION_CACHE_ON_PURGE` | `false` | When `true`, `PurgeQueue` clears the FIFO 5-minute deduplication cache for the target queue and matching SNS FIFO topic dedup entries |
 | `FLOCI_SERVICES_S3_DEFAULT_PRESIGN_EXPIRY_SECONDS` | `3600`           | Pre-signed URL expiry                                         |
 | `FLOCI_SERVICES_DOCKER_NETWORK`                    | *(unset)*        | Shared Docker network for Lambda, RDS, ElastiCache containers |
+| `FLOCI_SERVICES_RDS_DATA_ENABLED`                  | `true`           | Enable the RDS Data API service                               |
+| `FLOCI_SERVICES_RDS_DATA_TRANSACTION_TTL_SECONDS`  | `180`            | Idle timeout, in seconds, before leaked RDS Data API transactions expire |
 | `FLOCI_SERVICES_ECS_MOCK`                          | `false`          | Skip Docker; tasks go straight to RUNNING (useful for CI)     |
 | `FLOCI_SERVICES_ECS_DOCKER_NETWORK`                | *(unset)*        | Docker network for ECS task containers                        |
 | `FLOCI_SERVICES_ECS_DEFAULT_MEMORY_MB`             | `512`            | Default memory (MB) when task definition omits it             |

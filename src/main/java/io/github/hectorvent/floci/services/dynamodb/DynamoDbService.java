@@ -157,14 +157,6 @@ public class DynamoDbService {
     public TableDefinition createTable(String tableName,
                                         List<KeySchemaElement> keySchema,
                                         List<AttributeDefinition> attributeDefinitions,
-                                        Long readCapacity, Long writeCapacity) {
-        return createTable(tableName, keySchema, attributeDefinitions, readCapacity, writeCapacity,
-                           List.of(), List.of(), regionResolver.getDefaultRegion());
-    }
-
-    public TableDefinition createTable(String tableName,
-                                        List<KeySchemaElement> keySchema,
-                                        List<AttributeDefinition> attributeDefinitions,
                                         Long readCapacity, Long writeCapacity, String region) {
         return createTable(tableName, keySchema, attributeDefinitions, readCapacity, writeCapacity,
                            List.of(), List.of(), region);
@@ -322,10 +314,6 @@ public class DynamoDbService {
         return table;
     }
 
-    public TableDefinition describeTable(String tableName) {
-        return describeTable(tableName, regionResolver.getDefaultRegion());
-    }
-
     public TableDefinition describeTable(String tableName, String region) {
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);
@@ -345,10 +333,6 @@ public class DynamoDbService {
         tableStore.put(regionKey(region, canonicalTableName), table);
     }
 
-    public void deleteTable(String tableName) {
-        deleteTable(tableName, regionResolver.getDefaultRegion());
-    }
-
     public void deleteTable(String tableName, String region) {
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);
@@ -365,10 +349,6 @@ public class DynamoDbService {
             streamService.deleteStream(canonicalTableName, region);
         }
         LOG.infov("Deleted table: {0}", canonicalTableName);
-    }
-
-    public List<String> listTables() {
-        return listTables(regionResolver.getDefaultRegion());
     }
 
     public List<String> listTables(String region) {
@@ -402,10 +382,6 @@ public class DynamoDbService {
     }
 
     public record ListTablesResult(List<String> tableNames, String lastEvaluatedTableName) {}
-
-    public void putItem(String tableName, JsonNode item) {
-        putItem(tableName, item, null, null, null, regionResolver.getDefaultRegion(), "NONE");
-    }
 
     public void putItem(String tableName, JsonNode item, String region) {
         putItem(tableName, item, null, null, null, region, "NONE");
@@ -449,10 +425,6 @@ public class DynamoDbService {
         });
     }
 
-    public JsonNode getItem(String tableName, JsonNode key) {
-        return getItem(tableName, key, regionResolver.getDefaultRegion());
-    }
-
     public JsonNode getItem(String tableName, JsonNode key, String region) {
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);
@@ -472,10 +444,6 @@ public class DynamoDbService {
         }
         LOG.tracev("Got item from {0}: key={1} item={2}", canonicalTableName, itemKey, item);
         return item;
-    }
-
-    public JsonNode deleteItem(String tableName, JsonNode key) {
-        return deleteItem(tableName, key, null, null, null, regionResolver.getDefaultRegion(), "NONE");
     }
 
     public JsonNode deleteItem(String tableName, JsonNode key, String region) {
@@ -518,14 +486,6 @@ public class DynamoDbService {
 
             return removed;
         });
-    }
-
-    public UpdateResult updateItem(String tableName, JsonNode key, JsonNode attributeUpdates,
-                                String updateExpression,
-                                JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                                String returnValues) {
-        return updateItem(tableName, key, attributeUpdates, updateExpression, expressionAttrNames,
-                          expressionAttrValues, returnValues, null, regionResolver.getDefaultRegion(), "NONE");
     }
 
     public UpdateResult updateItem(String tableName, JsonNode key, JsonNode attributeUpdates,
@@ -675,13 +635,6 @@ public class DynamoDbService {
 
             return new UpdateResult(item, existing);
         });
-    }
-
-    public QueryResult query(String tableName, JsonNode keyConditions,
-                              JsonNode expressionAttrValues, String keyConditionExpression,
-                              String filterExpression, Integer limit) {
-        return query(tableName, keyConditions, expressionAttrValues, keyConditionExpression,
-                     filterExpression, limit, null, null, null, null, regionResolver.getDefaultRegion());
     }
 
     public QueryResult query(String tableName, JsonNode keyConditions,
@@ -846,14 +799,15 @@ public class DynamoDbService {
 
     public ScanResult scan(String tableName, String filterExpression,
                             JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                            JsonNode scanFilter, Integer limit, JsonNode exclusiveStartKey) {
+                            JsonNode scanFilter, Integer limit, JsonNode exclusiveStartKey, String region) {
         return scan(tableName, filterExpression, expressionAttrNames, expressionAttrValues,
-                    scanFilter, limit, exclusiveStartKey, regionResolver.getDefaultRegion());
+                scanFilter, limit, exclusiveStartKey, null, region);
     }
 
     public ScanResult scan(String tableName, String filterExpression,
                             JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                            JsonNode scanFilter, Integer limit, JsonNode exclusiveStartKey, String region) {
+                            JsonNode scanFilter, Integer limit, JsonNode exclusiveStartKey,
+                            String indexName, String region) {
         DynamoDbReservedWords.check(filterExpression, "FilterExpression");
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);
@@ -863,10 +817,28 @@ public class DynamoDbService {
         var items = itemsByTable.get(storageKey);
         if (items == null) return new ScanResult(List.of(), 0, null);
 
-        // ConcurrentSkipListMap keeps items sorted by item key — no sort needed.
+        // ConcurrentSkipListMap keeps items sorted by base item key — no sort needed.
         // Use tailMap for O(log n) pagination instead of O(n) linear search.
         String pkName = table.getPartitionKeyName();
         String skName = table.getSortKeyName();
+
+        // When scanning a secondary index, the LastEvaluatedKey must carry the index key
+        // attributes in addition to the base table key. Cursor navigation still uses the
+        // (unique) base table key, which is a total order even when index sort keys tie.
+        boolean indexScan = indexName != null;
+        String lekPkName = pkName;
+        String lekSkName = skName;
+        if (indexScan) {
+            var gsi = table.findGsi(indexName);
+            var lsi = table.findLsi(indexName);
+            if (gsi.isPresent()) {
+                lekPkName = gsi.get().getPartitionKeyName();
+                lekSkName = gsi.get().getSortKeyName();
+            } else if (lsi.isPresent()) {
+                lekPkName = lsi.get().getPartitionKeyName();
+                lekSkName = lsi.get().getSortKeyName();
+            }
+        }
 
         var source = exclusiveStartKey != null
                 ? items.tailMap(buildItemKeyFromNode(exclusiveStartKey, pkName, skName), false).values()
@@ -874,36 +846,35 @@ public class DynamoDbService {
 
         int totalScanned = 0;
         List<JsonNode> results = new ArrayList<>();
-        for (JsonNode item : source) {
-            totalScanned++;
-            if (isExpired(item, table)) {
-                continue;
-            }
-            if (filterExpression != null
-                    && !matchesFilterExpression(item, filterExpression, expressionAttrNames, expressionAttrValues)) {
-                continue;
-            }
-            if (scanFilter != null && !matchesScanFilter(item, scanFilter)) {
-                continue;
-            }
-            results.add(item);
-        }
-
         JsonNode lastEvaluatedKey = null;
-        if (limit != null && limit > 0 && results.size() > limit) {
-            JsonNode lastItem = results.get(limit - 1);
-            lastEvaluatedKey = buildKeyNode(table, lastItem, pkName, skName);
-            results = results.subList(0, limit);
+        Iterator<JsonNode> it = source.iterator();
+        while (it.hasNext()) {
+            JsonNode item = it.next();
+            totalScanned++;
+            if (!isExpired(item, table)) {
+                boolean matched = (filterExpression == null
+                        || matchesFilterExpression(item, filterExpression, expressionAttrNames, expressionAttrValues))
+                        && (scanFilter == null || matchesScanFilter(item, scanFilter));
+                if (matched) results.add(item);
+            }
+            // Limit caps SCANNED items (those read), not matched items. Stop at the
+            // limit and surface a cursor when more items remain to be examined.
+            if (limit != null && limit > 0 && totalScanned >= limit) {
+                if (it.hasNext()) {
+                    lastEvaluatedKey = buildKeyNode(table, item, lekPkName, lekSkName, indexScan);
+                }
+                break;
+            }
         }
 
-        // Apply 1MB response size limit
+        // Apply 1MB response size limit (only when not already truncated by Limit)
         if (lastEvaluatedKey == null) {
             final int MAX_RESPONSE_BYTES = 1024 * 1024;
             int accSize = 0;
             for (int i = 0; i < results.size(); i++) {
                 int sz = DynamoDbItemSize.calculateItemSize(results.get(i));
                 if (accSize > 0 && accSize + sz > MAX_RESPONSE_BYTES) {
-                    lastEvaluatedKey = buildKeyNode(table, results.get(i - 1), pkName, skName);
+                    lastEvaluatedKey = buildKeyNode(table, results.get(i - 1), lekPkName, lekSkName, indexScan);
                     results = new ArrayList<>(results.subList(0, i));
                     break;
                 }
@@ -1615,16 +1586,22 @@ public class DynamoDbService {
                         String arg2 = inner.substring(commaPos + 1).trim();
                         JsonNode list1 = evaluateSetExpr(snapshot, arg1, exprAttrNames, exprAttrValues);
                         JsonNode list2 = evaluateSetExpr(snapshot, arg2, exprAttrNames, exprAttrValues);
-                        if (list1 != null && list2 != null && list1.has("L") && list2.has("L")) {
-                            com.fasterxml.jackson.databind.node.ArrayNode merged =
-                                    com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
-                            list1.get("L").forEach(merged::add);
-                            list2.get("L").forEach(merged::add);
-                            com.fasterxml.jackson.databind.node.ObjectNode result =
-                                    com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
-                            result.set("L", merged);
-                            item.set(attrName, result);
+                        if (list1 == null || list2 == null) {
+                            throw new AwsException("ValidationException",
+                                    "The provided expression refers to an attribute that does not exist in the item", 400);
                         }
+                        if (!list1.has("L") || !list2.has("L")) {
+                            throw new AwsException("ValidationException",
+                                    "An operand in the update expression has an incorrect data type", 400);
+                        }
+                        com.fasterxml.jackson.databind.node.ArrayNode merged =
+                                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+                        list1.get("L").forEach(merged::add);
+                        list2.get("L").forEach(merged::add);
+                        com.fasterxml.jackson.databind.node.ObjectNode result =
+                                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+                        result.set("L", merged);
+                        item.set(attrName, result);
                     }
                 }
             } else if (valuePart.startsWith(":") && exprAttrValues != null) {

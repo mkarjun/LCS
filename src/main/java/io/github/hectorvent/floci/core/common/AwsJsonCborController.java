@@ -23,12 +23,11 @@ import java.util.Iterator;
 import java.util.Map;
 
 /**
- * Generic dispatcher for all AWS services that use the application/cbor protocol.
- * Routes requests to the appropriate service handler based on the X-Amz-Target header prefix.
+ * Generic dispatcher for all AWS services that use the application/cbor protocol,
+ * via either smithy-rpc-v2-cbor path routing or the legacy X-Amz-Target header.
  * <p>
- * Currently supported services:
- * - DynamoDB (DynamoDB_20120810.*)
- * - SQS (AmazonSQS.*)
+ * Currently supported services: DynamoDB (incl. Streams), SQS, SNS, Kinesis,
+ * Step Functions, and CloudWatch Metrics.
  */
 @Path("/")
 public class AwsJsonCborController {
@@ -72,38 +71,50 @@ public class AwsJsonCborController {
 
 
     /**
-     * Serializes a JsonNode to CBOR bytes, encoding fields named "Timestamp" with CBOR tag 1
-     * as required by the smithy-rpc-v2-cbor protocol specification.
+     * Serializes a JsonNode to CBOR bytes, encoding timestamp shapes with CBOR tag 1
+     * (epoch seconds, RFC 8949 section 3.4.2) as required by the smithy-rpc-v2-cbor
+     * protocol specification.
+     * <p>
+     * Package-private so the timestamp-tagging behaviour can be unit-tested directly
+     * without booting Quarkus.
      */
-    private static byte[] nodeToSmithyCbor(JsonNode node) throws Exception {
+    static byte[] nodeToSmithyCbor(JsonNode node) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         CBORFactory factory = (CBORFactory) CBOR_MAPPER.getFactory();
         try (CBORGenerator gen = factory.createGenerator(out)) {
-            writeNodeToCbor(gen, node, null);
+            writeNodeToCbor(gen, node, false);
         }
         return out.toByteArray();
     }
 
-    private static void writeNodeToCbor(CBORGenerator gen, JsonNode node, String fieldName) throws Exception {
+    /**
+     * Recursively writes a JsonNode to CBOR. The {@code numberIsTimestamp} flag carries
+     * timestamp context down the tree (this serializer is schema-less, so it cannot look
+     * up the Smithy shape): when set and the node is a number, it is emitted as a CBOR
+     * tag(1) timestamp. The flag is set by {@link #isTimestampField(String)} for matching
+     * object fields and is propagated into array elements, so both scalar timestamps and
+     * elements of timestamp lists are tagged.
+     */
+    private static void writeNodeToCbor(CBORGenerator gen, JsonNode node, boolean numberIsTimestamp) throws Exception {
         if (node.isObject()) {
             gen.writeStartObject();
             Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> entry = fields.next();
                 gen.writeFieldName(entry.getKey());
-                writeNodeToCbor(gen, entry.getValue(), entry.getKey());
+                writeNodeToCbor(gen, entry.getValue(), isTimestampField(entry.getKey()));
             }
             gen.writeEndObject();
         } else if (node.isArray()) {
             gen.writeStartArray();
             for (JsonNode item : node) {
-                writeNodeToCbor(gen, item, null);
+                // Propagate the timestamp context so every element of a timestamp list
+                // (e.g. CloudWatch GetMetricData MetricDataResults[].Timestamps) is tagged.
+                writeNodeToCbor(gen, item, numberIsTimestamp);
             }
             gen.writeEndArray();
-        } else if ("Timestamp".equals(fieldName) && node.isNumber()) {
-            gen.writeTag(1);
-            // Smithy rpc-v2-cbor timestamps are epoch seconds encoded as tagged floating-point numbers.
-            gen.writeNumber(node.doubleValue());
+        } else if (numberIsTimestamp && node.isNumber()) {
+            writeCborTimestamp(gen, node);
         } else if (node.isTextual()) {
             gen.writeString(node.textValue());
         } else if (node.isDouble() || node.isFloat()) {
@@ -120,10 +131,43 @@ public class AwsJsonCborController {
     }
 
     /**
-     * Handles AWS smithy-rpc-v2-cbor protocol requests.
-     * AWS SDK v2 sends to POST /service/{sdkId}/operation/{op}
-     * with a CBOR content type and no X-Amz-Target header.
-     * Supported services: DynamoDB, SQS, SNS, StepFunctions, CloudWatch.
+     * Name-based heuristic for detecting timestamp shapes. Since this serializer is
+     * schema-less it cannot consult the Smithy model, so it matches field names by their
+     * conventional suffix: AWS timestamp members end in {@code "Timestamp"} (e.g.
+     * GetMetricStatistics' scalar {@code Timestamp}, or alarm fields such as
+     * {@code StateUpdatedTimestamp}), and list-of-timestamp members end in
+     * {@code "Timestamps"} (e.g. CloudWatch GetMetricData's
+     * {@code MetricDataResults[].Timestamps}). The flag is propagated into array elements,
+     * so both scalar timestamps and timestamp lists are tagged.
+     * <p>
+     * This is a pragmatic heuristic; a shape carrying a differently-named time value would
+     * need to be driven from the Smithy model instead.
+     */
+    private static boolean isTimestampField(String fieldName) {
+        return fieldName.endsWith("Timestamp") || fieldName.endsWith("Timestamps");
+    }
+
+    /**
+     * Writes a numeric node as a CBOR tag(1) epoch-seconds timestamp, preserving
+     * integer-ness. Integral epoch seconds are emitted as a tag(1) integer and
+     * fractional values as a tag(1) float; both are spec-valid (RFC 8949 section 3.4.2)
+     * and accepted by AWS SDK decoders.
+     */
+    private static void writeCborTimestamp(CBORGenerator gen, JsonNode node) throws Exception {
+        gen.writeTag(1);
+        if (node.isIntegralNumber()) {
+            gen.writeNumber(node.longValue());
+        } else {
+            gen.writeNumber(node.doubleValue());
+        }
+    }
+
+    /**
+     * Handles AWS smithy-rpc-v2-cbor protocol requests:
+     * POST /service/{serviceName}/operation/{operation} with a CBOR content type,
+     * the smithy-protocol header, and no X-Amz-Target. The {serviceName} segment
+     * is the Smithy service shape name — for AWS services the X-Amz-Target prefix
+     * without its trailing dot (e.g. DynamoDB_20120810, GraniteServiceVersion20100801).
      */
     @POST
     @Path("service/{serviceId}/operation/{operation}")
@@ -247,13 +291,14 @@ public class AwsJsonCborController {
         }
         return switch (descriptor.externalKey()) {
             case "dynamodb" -> {
-                if ("DynamoDB Streams".equals(serviceId)) {
+                if ("DynamoDB Streams".equals(serviceId) || serviceId.startsWith("DynamoDBStreams")) {
                     yield dynamoDbStreamsJsonHandler.handle(operation, request, region);
                 }
                 yield dynamoDbJsonHandler.handle(operation, request, region);
             }
             case "sqs" -> sqsJsonHandler.handle(operation, request, region);
             case "sns" -> snsJsonHandler.handle(operation, request, region);
+            case "kinesis" -> kinesisJsonHandler.handle(operation, request, region);
             case "states" -> sfnJsonHandler.handle(operation, request, region);
             case "monitoring" -> cloudWatchMetricsJsonHandler.handle(operation, request, region);
             default -> null;

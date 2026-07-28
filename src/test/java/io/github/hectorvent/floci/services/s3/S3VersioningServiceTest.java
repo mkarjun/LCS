@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -203,6 +204,22 @@ class S3VersioningServiceTest {
     }
 
     @Test
+    void openObjectStreamReadsSpecificVersionFromDisk() throws Exception {
+        S3Service diskService = new S3Service(new InMemoryStorage<>(), new InMemoryStorage<>(), tempDir, false);
+        diskService.createBucket("versioned-bucket", "us-east-1");
+        diskService.putBucketVersioning("versioned-bucket", "Enabled");
+        S3Object v1 = diskService.putObject("versioned-bucket", "stream.txt",
+                "first-version".getBytes(StandardCharsets.UTF_8), "text/plain", null);
+        diskService.putObject("versioned-bucket", "stream.txt",
+                "second-version".getBytes(StandardCharsets.UTF_8), "text/plain", null);
+
+        try (InputStream stream = diskService.openObjectStream(
+                "versioned-bucket", "stream.txt", v1.getVersionId())) {
+            assertEquals("first-version", new String(stream.readAllBytes(), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
     void deleteMarkerByVersionIdRestoresPreviousVersion() {
         s3Service.putBucketVersioning("versioned-bucket", "Enabled");
         S3Object v1 = s3Service.putObject("versioned-bucket", "file",
@@ -314,4 +331,23 @@ class S3VersioningServiceTest {
         Map<String, String> tags = s3Service.getObjectTagging("versioned-bucket", "clear-key");
         assertTrue(tags.isEmpty(), "REPLACE with empty tags should clear all source tags");
     }
+
+    @Test
+    void getObjectReturnsPromotedContentAfterLatestVersionDeleted() {
+        s3Service.putBucketVersioning("versioned-bucket", "Enabled");
+
+        s3Service.putObject("versioned-bucket", "key",
+                "v1".getBytes(StandardCharsets.UTF_8), "text/plain", null);
+        S3Object v2 = s3Service.putObject("versioned-bucket", "key",
+                "v2".getBytes(StandardCharsets.UTF_8), "text/plain", null);
+
+        // Delete the latest version (v2) — v1 should be promoted
+        s3Service.deleteObject("versioned-bucket", "key", v2.getVersionId());
+
+        // getObject without versionId should return v1's content, not v2's
+        S3Object result = s3Service.getObject("versioned-bucket", "key");
+        assertEquals("v1", new String(result.getData(), StandardCharsets.UTF_8),
+                "getObject should return the promoted version's content after deleting the latest");
+    }
+
 }

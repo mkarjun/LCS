@@ -3,24 +3,31 @@ package io.github.hectorvent.floci.services.ecs;
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.ecs.model.Attribute;
+import io.github.hectorvent.floci.services.ecs.model.AwsVpcConfiguration;
 import io.github.hectorvent.floci.services.ecs.model.CapacityProvider;
 import io.github.hectorvent.floci.services.ecs.model.ClusterSetting;
 import io.github.hectorvent.floci.services.ecs.model.ContainerDefinition;
 import io.github.hectorvent.floci.services.ecs.model.ContainerInstance;
+import io.github.hectorvent.floci.services.ecs.model.ContainerOverride;
 import io.github.hectorvent.floci.services.ecs.model.EcsCluster;
 import io.github.hectorvent.floci.services.ecs.model.EcsLoadBalancer;
 import io.github.hectorvent.floci.services.ecs.model.EcsServiceModel;
 import io.github.hectorvent.floci.services.ecs.model.EcsTask;
 import io.github.hectorvent.floci.services.ecs.model.KeyValuePair;
 import io.github.hectorvent.floci.services.ecs.model.LaunchType;
+import io.github.hectorvent.floci.services.ecs.model.MountPoint;
 import io.github.hectorvent.floci.services.ecs.model.NetworkBinding;
+import io.github.hectorvent.floci.services.ecs.model.NetworkConfiguration;
 import io.github.hectorvent.floci.services.ecs.model.NetworkMode;
 import io.github.hectorvent.floci.services.ecs.model.PortMapping;
 import io.github.hectorvent.floci.services.ecs.model.ProtectedTask;
 import io.github.hectorvent.floci.services.ecs.model.ServiceDeployment;
 import io.github.hectorvent.floci.services.ecs.model.ServiceRevision;
+import io.github.hectorvent.floci.services.ecs.model.Secret;
 import io.github.hectorvent.floci.services.ecs.model.TaskDefinition;
 import io.github.hectorvent.floci.services.ecs.model.TaskSet;
+import io.github.hectorvent.floci.services.ecs.model.EfsVolumeConfiguration;
+import io.github.hectorvent.floci.services.ecs.model.Volume;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -129,7 +136,8 @@ public class EcsJsonHandler {
 
     private Response handleCreateCluster(JsonNode req, String region) {
         String name = req.path("clusterName").asText(null);
-        EcsCluster cluster = service.createCluster(name, region);
+        Map<String, String> tags = parseTagMap(req.path("tags"));
+        EcsCluster cluster = service.createCluster(name, tags, region);
         ObjectNode resp = objectMapper.createObjectNode();
         resp.set("cluster", clusterNode(cluster));
         return Response.ok(resp).build();
@@ -199,8 +207,16 @@ public class EcsJsonHandler {
         NetworkMode networkMode = parseEnum(req, "networkMode", NetworkMode.class);
         String cpu = req.has("cpu") ? req.path("cpu").asText() : null;
         String memory = req.has("memory") ? req.path("memory").asText() : null;
+        String taskRoleArn = req.hasNonNull("taskRoleArn") ? req.path("taskRoleArn").asText() : null;
+        String executionRoleArn = req.hasNonNull("executionRoleArn") ? req.path("executionRoleArn").asText() : null;
+        List<String> requiresCompatibilities = jsonArrayToList(req.path("requiresCompatibilities"));
+        Map<String, String> tags = parseTagMap(req.path("tags"));
 
-        TaskDefinition td = service.registerTaskDefinition(family, containerDefs, networkMode, cpu, memory, region);
+        TaskDefinition td = service.registerTaskDefinition(family, containerDefs, networkMode, cpu, memory,
+                taskRoleArn, executionRoleArn, requiresCompatibilities, tags, region);
+        // Task-level volumes are not part of registerTaskDefinition's signature; set them on the
+        // returned (and stored) task definition so they round-trip and reach RunTask launches.
+        td.setVolumes(parseVolumes(req.path("volumes")));
 
         ObjectNode resp = objectMapper.createObjectNode();
         resp.set("taskDefinition", taskDefinitionNode(td));
@@ -264,9 +280,13 @@ public class EcsJsonHandler {
         LaunchType launchType = parseEnum(req, "launchType", LaunchType.class);
         String group = req.has("group") ? req.path("group").asText() : null;
         String startedBy = req.has("startedBy") ? req.path("startedBy").asText() : null;
+        List<ContainerOverride> containerOverrides =
+                parseContainerOverrides(req.path("overrides").path("containerOverrides"));
+        NetworkConfiguration networkConfiguration =
+                parseNetworkConfiguration(req.path("networkConfiguration"));
 
         List<EcsTask> launched = service.runTask(cluster, taskDefinition, count,
-                launchType, group, startedBy, region);
+                launchType, group, startedBy, containerOverrides, networkConfiguration, region);
 
         ObjectNode resp = objectMapper.createObjectNode();
         ArrayNode arr = objectMapper.createArrayNode();
@@ -373,9 +393,11 @@ public class EcsJsonHandler {
         int desiredCount = req.path("desiredCount").asInt(1);
         LaunchType launchType = parseEnum(req, "launchType", LaunchType.class);
         List<EcsLoadBalancer> loadBalancers = parseLoadBalancers(req.path("loadBalancers"));
+        NetworkConfiguration networkConfiguration = parseNetworkConfiguration(req.path("networkConfiguration"));
+        Map<String, String> tags = parseTagMap(req.path("tags"));
 
         EcsServiceModel svc = service.createService(cluster, serviceName, taskDefinition,
-                desiredCount, launchType, loadBalancers, region);
+                desiredCount, launchType, loadBalancers, networkConfiguration, tags, region);
 
         ObjectNode resp = objectMapper.createObjectNode();
         resp.set("service", serviceNode(svc));
@@ -425,13 +447,34 @@ public class EcsJsonHandler {
         return result;
     }
 
+    /** Parse an ECS {@code networkConfiguration} node (camelCase, as the data-plane API uses).
+     *  Public so the Step Functions ecs:runTask integration can reuse it after recasing its
+     *  PascalCase input, rather than duplicating the awsvpc parsing. */
+    public NetworkConfiguration parseNetworkConfiguration(JsonNode node) {
+        if (node == null || !node.isObject() || !node.hasNonNull("awsvpcConfiguration")) {
+            return null;
+        }
+        JsonNode awsvpc = node.path("awsvpcConfiguration");
+        AwsVpcConfiguration awsvpcConfig = new AwsVpcConfiguration();
+        awsvpcConfig.setSubnets(jsonArrayToList(awsvpc.path("subnets")));
+        awsvpcConfig.setSecurityGroups(jsonArrayToList(awsvpc.path("securityGroups")));
+        if (awsvpc.hasNonNull("assignPublicIp")) {
+            awsvpcConfig.setAssignPublicIp(awsvpc.path("assignPublicIp").asText());
+        }
+        NetworkConfiguration networkConfiguration = new NetworkConfiguration();
+        networkConfiguration.setAwsvpcConfiguration(awsvpcConfig);
+        return networkConfiguration;
+    }
+
     private Response handleUpdateService(JsonNode req, String region) {
         String cluster = req.has("cluster") ? req.path("cluster").asText() : null;
         String serviceName = req.path("service").asText();
         String taskDefinition = req.has("taskDefinition") ? req.path("taskDefinition").asText() : null;
         Integer desiredCount = req.has("desiredCount") ? req.path("desiredCount").asInt() : null;
+        NetworkConfiguration networkConfiguration = parseNetworkConfiguration(req.path("networkConfiguration"));
 
-        EcsServiceModel svc = service.updateService(cluster, serviceName, taskDefinition, desiredCount, region);
+        EcsServiceModel svc = service.updateService(cluster, serviceName, taskDefinition, desiredCount,
+                networkConfiguration, region);
 
         ObjectNode resp = objectMapper.createObjectNode();
         resp.set("service", serviceNode(svc));
@@ -885,6 +928,18 @@ public class EcsJsonHandler {
         }
         if (td.getCpu() != null) { n.put("cpu", td.getCpu()); }
         if (td.getMemory() != null) { n.put("memory", td.getMemory()); }
+        if (td.getTaskRoleArn() != null) { n.put("taskRoleArn", td.getTaskRoleArn()); }
+        if (td.getExecutionRoleArn() != null) { n.put("executionRoleArn", td.getExecutionRoleArn()); }
+        if (td.getRequiresCompatibilities() != null && !td.getRequiresCompatibilities().isEmpty()) {
+            ArrayNode arr = objectMapper.createArrayNode();
+            td.getRequiresCompatibilities().forEach(arr::add);
+            n.set("requiresCompatibilities", arr);
+        }
+        if (td.getCompatibilities() != null && !td.getCompatibilities().isEmpty()) {
+            ArrayNode arr = objectMapper.createArrayNode();
+            td.getCompatibilities().forEach(arr::add);
+            n.set("compatibilities", arr);
+        }
 
         ArrayNode containers = objectMapper.createArrayNode();
         if (td.getContainerDefinitions() != null) {
@@ -893,6 +948,45 @@ public class EcsJsonHandler {
             }
         }
         n.set("containerDefinitions", containers);
+        if (td.getVolumes() != null && !td.getVolumes().isEmpty()) {
+            ArrayNode vols = objectMapper.createArrayNode();
+            for (Volume v : td.getVolumes()) {
+                ObjectNode vNode = objectMapper.createObjectNode();
+                vNode.put("name", v.name());
+                if (v.hostSourcePath() != null) {
+                    ObjectNode host = objectMapper.createObjectNode();
+                    host.put("sourcePath", v.hostSourcePath());
+                    vNode.set("host", host);
+                }
+                if (v.efs() != null) {
+                    EfsVolumeConfiguration e = v.efs();
+                    ObjectNode efs = objectMapper.createObjectNode();
+                    efs.put("fileSystemId", e.fileSystemId());
+                    if (e.rootDirectory() != null) {
+                        efs.put("rootDirectory", e.rootDirectory());
+                    }
+                    if (e.transitEncryption() != null) {
+                        efs.put("transitEncryption", e.transitEncryption());
+                    }
+                    if (e.transitEncryptionPort() != null) {
+                        efs.put("transitEncryptionPort", e.transitEncryptionPort());
+                    }
+                    if (e.accessPointId() != null || e.iam() != null) {
+                        ObjectNode auth = objectMapper.createObjectNode();
+                        if (e.accessPointId() != null) {
+                            auth.put("accessPointId", e.accessPointId());
+                        }
+                        if (e.iam() != null) {
+                            auth.put("iam", e.iam());
+                        }
+                        efs.set("authorizationConfig", auth);
+                    }
+                    vNode.set("efsVolumeConfiguration", efs);
+                }
+                vols.add(vNode);
+            }
+            n.set("volumes", vols);
+        }
         if (td.getTags() != null && !td.getTags().isEmpty()) {
             n.set("tags", tagsNode(td.getTags()));
         }
@@ -930,10 +1024,35 @@ public class EcsJsonHandler {
             n.set("environment", envArr);
         }
 
+        if (def.getSecrets() != null && !def.getSecrets().isEmpty()) {
+            ArrayNode secretsArr = objectMapper.createArrayNode();
+            for (Secret secret : def.getSecrets()) {
+                ObjectNode secretNode = objectMapper.createObjectNode();
+                secretNode.put("name", secret.name());
+                secretNode.put("valueFrom", secret.valueFrom());
+                secretsArr.add(secretNode);
+            }
+            n.set("secrets", secretsArr);
+        }
+
+        if (def.getMountPoints() != null && !def.getMountPoints().isEmpty()) {
+            ArrayNode mps = objectMapper.createArrayNode();
+            for (MountPoint mp : def.getMountPoints()) {
+                ObjectNode mpNode = objectMapper.createObjectNode();
+                mpNode.put("sourceVolume", mp.sourceVolume());
+                mpNode.put("containerPath", mp.containerPath());
+                mpNode.put("readOnly", mp.readOnly());
+                mps.add(mpNode);
+            }
+            n.set("mountPoints", mps);
+        }
+
         return n;
     }
 
-    private ObjectNode taskNode(EcsTask t) {
+    /** Renders an ECS task to its data-plane JSON shape. Reused by the Step Functions
+     *  ecs:runTask integration ({@link io.github.hectorvent.floci.services.stepfunctions.AslExecutor}). */
+    public ObjectNode taskNode(EcsTask t) {
         ObjectNode n = objectMapper.createObjectNode();
         n.put("taskArn", t.getTaskArn());
         n.put("clusterArn", t.getClusterArn());
@@ -1012,6 +1131,23 @@ public class EcsJsonHandler {
                 lbs.add(ln);
             }
             n.set("loadBalancers", lbs);
+        }
+        if (s.getNetworkConfiguration() != null
+                && s.getNetworkConfiguration().getAwsvpcConfiguration() != null) {
+            AwsVpcConfiguration awsvpc = s.getNetworkConfiguration().getAwsvpcConfiguration();
+            ObjectNode awsvpcNode = objectMapper.createObjectNode();
+            ArrayNode subnets = objectMapper.createArrayNode();
+            awsvpc.getSubnets().forEach(subnets::add);
+            awsvpcNode.set("subnets", subnets);
+            ArrayNode securityGroups = objectMapper.createArrayNode();
+            awsvpc.getSecurityGroups().forEach(securityGroups::add);
+            awsvpcNode.set("securityGroups", securityGroups);
+            if (awsvpc.getAssignPublicIp() != null) {
+                awsvpcNode.put("assignPublicIp", awsvpc.getAssignPublicIp());
+            }
+            ObjectNode networkConfig = objectMapper.createObjectNode();
+            networkConfig.set("awsvpcConfiguration", awsvpcNode);
+            n.set("networkConfiguration", networkConfig);
         }
         return n;
     }
@@ -1151,6 +1287,10 @@ public class EcsJsonHandler {
 
             def.setPortMappings(parsePortMappings(item.path("portMappings")));
             def.setEnvironment(parseKeyValuePairs(item.path("environment")));
+            if (item.has("secrets")) {
+                def.setSecrets(parseSecrets(item.path("secrets")));
+            }
+            def.setMountPoints(parseMountPoints(item.path("mountPoints")));
 
             if (item.has("command") && item.path("command").isArray()) {
                 List<String> cmd = new ArrayList<>();
@@ -1189,6 +1329,85 @@ public class EcsJsonHandler {
         }
         for (JsonNode item : node) {
             result.add(new KeyValuePair(item.path("name").asText(), item.path("value").asText()));
+        }
+        return result;
+    }
+
+    private List<Secret> parseSecrets(JsonNode node) {
+        List<Secret> result = new ArrayList<>();
+        if (!node.isArray()) {
+            return result;
+        }
+        for (JsonNode item : node) {
+            result.add(new Secret(item.path("name").asText(), item.path("valueFrom").asText()));
+        }
+        return result;
+    }
+
+    private List<Volume> parseVolumes(JsonNode node) {
+        List<Volume> result = new ArrayList<>();
+        if (!node.isArray()) {
+            return result;
+        }
+        for (JsonNode item : node) {
+            String hostSourcePath = item.path("host").path("sourcePath").asText(null);
+            EfsVolumeConfiguration efs = parseEfsVolumeConfiguration(item.path("efsVolumeConfiguration"));
+            result.add(new Volume(item.path("name").asText(), hostSourcePath, efs));
+        }
+        return result;
+    }
+
+    private EfsVolumeConfiguration parseEfsVolumeConfiguration(JsonNode node) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        String fileSystemId = node.path("fileSystemId").asText(null);
+        if (fileSystemId == null) {
+            return null;
+        }
+        Integer transitEncryptionPort = node.path("transitEncryptionPort").isNumber()
+                ? node.path("transitEncryptionPort").asInt() : null;
+        JsonNode auth = node.path("authorizationConfig");
+        return new EfsVolumeConfiguration(
+                fileSystemId,
+                node.path("rootDirectory").asText(null),
+                node.path("transitEncryption").asText(null),
+                transitEncryptionPort,
+                auth.path("accessPointId").asText(null),
+                auth.path("iam").asText(null));
+    }
+
+    private List<MountPoint> parseMountPoints(JsonNode node) {
+        List<MountPoint> result = new ArrayList<>();
+        if (!node.isArray()) {
+            return result;
+        }
+        for (JsonNode item : node) {
+            result.add(new MountPoint(
+                    item.path("sourceVolume").asText(),
+                    item.path("containerPath").asText(),
+                    item.path("readOnly").asBoolean(false)));
+        }
+        return result;
+    }
+
+    /** Parses ECS container overrides from data-plane JSON. Reused by the Step Functions
+     *  ecs:runTask integration ({@link io.github.hectorvent.floci.services.stepfunctions.AslExecutor}). */
+    public List<ContainerOverride> parseContainerOverrides(JsonNode node) {
+        List<ContainerOverride> result = new ArrayList<>();
+        if (!node.isArray()) {
+            return result;
+        }
+        for (JsonNode item : node) {
+            ContainerOverride co = new ContainerOverride();
+            co.setName(item.path("name").asText());
+            if (item.has("command") && item.path("command").isArray()) {
+                List<String> cmd = new ArrayList<>();
+                item.path("command").forEach(c -> cmd.add(c.asText()));
+                co.setCommand(cmd);
+            }
+            co.setEnvironment(parseKeyValuePairs(item.path("environment")));
+            result.add(co);
         }
         return result;
     }

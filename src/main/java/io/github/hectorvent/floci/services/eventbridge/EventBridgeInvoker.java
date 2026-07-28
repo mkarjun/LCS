@@ -4,8 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
+import io.github.hectorvent.floci.services.batch.BatchService;
 import io.github.hectorvent.floci.services.eventbridge.model.InputTransformer;
 import io.github.hectorvent.floci.services.eventbridge.model.Target;
+import io.github.hectorvent.floci.services.firehose.FirehoseService;
+import io.github.hectorvent.floci.services.firehose.model.Record;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
 import io.github.hectorvent.floci.services.lambda.model.InvocationType;
 import io.github.hectorvent.floci.services.sns.SnsService;
@@ -13,6 +16,10 @@ import io.github.hectorvent.floci.services.sqs.SqsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @ApplicationScoped
 public class EventBridgeInvoker {
@@ -22,6 +29,8 @@ public class EventBridgeInvoker {
     private final LambdaService lambdaService;
     private final SqsService sqsService;
     private final SnsService snsService;
+    private final BatchService batchService;
+    private final FirehoseService firehoseService;
     private final ObjectMapper objectMapper;
     private final String baseUrl;
 
@@ -29,13 +38,25 @@ public class EventBridgeInvoker {
     public EventBridgeInvoker(LambdaService lambdaService,
                               SqsService sqsService,
                               SnsService snsService,
+                              BatchService batchService,
+                              FirehoseService firehoseService,
                               ObjectMapper objectMapper,
                               EmulatorConfig config) {
         this.lambdaService = lambdaService;
         this.sqsService = sqsService;
         this.snsService = snsService;
+        this.batchService = batchService;
+        this.firehoseService = firehoseService;
         this.objectMapper = objectMapper;
         this.baseUrl = config.baseUrl();
+    }
+
+    EventBridgeInvoker(LambdaService lambdaService,
+                       SqsService sqsService,
+                       SnsService snsService,
+                       ObjectMapper objectMapper,
+                       EmulatorConfig config) {
+        this(lambdaService, sqsService, snsService, null, null, objectMapper, config);
     }
 
     public void invokeTarget(Target target, String eventJson, String region) {
@@ -67,6 +88,32 @@ public class EventBridgeInvoker {
                 String topicRegion = extractRegionFromArn(arn, region);
                 snsService.publish(arn, null, payload, "EventBridge", topicRegion);
                 LOG.debugv("EventBridge delivered to SNS: {0}", arn);
+            } else if (arn.contains(":batch:") && arn.contains(":job-queue/")) {
+                if (batchService == null || target.getBatchParameters() == null) {
+                    LOG.warnv("EventBridge Batch target missing Batch service or parameters: {0}", arn);
+                    return;
+                }
+                String targetRegion = extractRegionFromArn(arn, region);
+                batchService.submitFromEventBridge(
+                        arn,
+                        target.getBatchParameters().getJobDefinition(),
+                        target.getBatchParameters().getJobName(),
+                        parametersFromBatchPayload(payload),
+                        target.getBatchParameters().getRetryStrategy(),
+                        targetRegion
+                );
+                LOG.debugv("EventBridge delivered to Batch: {0}", arn);
+            } else if (arn.contains(":firehose:") && arn.contains(":deliverystream/")) {
+                if (firehoseService == null) {
+                    LOG.warnv("EventBridge Firehose target missing Firehose service: {0}", arn);
+                    return;
+                }
+                String streamName = arn.substring(
+                        arn.indexOf(":deliverystream/") + ":deliverystream/".length());
+                // AWS puts the (input-transformed) event JSON as the record Data verbatim,
+                // without appending a newline; the delivery-side NDJSON flush handles separation.
+                firehoseService.putRecord(streamName, new Record(payload.getBytes(StandardCharsets.UTF_8)));
+                LOG.debugv("EventBridge delivered to Firehose: {0}", arn);
             } else {
                 LOG.warnv("EventBridge: unsupported target ARN type: {0}", arn);
             }
@@ -114,8 +161,27 @@ public class EventBridgeInvoker {
         }
     }
 
+    private Map<String, String> parametersFromBatchPayload(String payload) {
+        Map<String, String> parameters = new LinkedHashMap<>();
+        if (payload == null || payload.isBlank()) {
+            return parameters;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(payload);
+            JsonNode parametersNode = node.path("Parameters");
+            if (parametersNode.isObject()) {
+                parametersNode.fields().forEachRemaining(entry -> {
+                    JsonNode value = entry.getValue();
+                    parameters.put(entry.getKey(), value.isTextual() ? value.asText() : value.toString());
+                });
+            }
+        } catch (Exception e) {
+            LOG.debugv("EventBridge Batch payload is not a JSON object with Parameters: {0}", e.getMessage());
+        }
+        return parameters;
+    }
+
     private static String extractRegionFromArn(String arn, String defaultRegion) {
-        String[] parts = arn.split(":");
-        return parts.length >= 4 && !parts[3].isEmpty() ? parts[3] : defaultRegion;
+        return AwsArnUtils.regionOrDefault(arn, defaultRegion);
     }
 }

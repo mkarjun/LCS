@@ -1,10 +1,12 @@
 package io.github.hectorvent.floci.services.cognito;
 
-import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.cognito.model.CognitoGroup;
 import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
 import io.github.hectorvent.floci.services.cognito.model.ResourceServer;
@@ -19,6 +21,7 @@ import jakarta.ws.rs.core.Response;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @ApplicationScoped
 public class CognitoJsonHandler {
@@ -38,6 +41,7 @@ public class CognitoJsonHandler {
             case "DescribeUserPool" -> handleDescribeUserPool(request);
             case "ListUserPools" -> handleListUserPools(request);
             case "UpdateUserPool" -> handleUpdateUserPool(request, region);
+            case "AddCustomAttributes" -> handleAddCustomAttributes(request);
             case "TagResource" -> handleTagResource(request);
             case "UntagResource" -> handleUntagResource(request);
             case "ListTagsForResource" -> handleListTagsForResource(request);
@@ -59,6 +63,7 @@ public class CognitoJsonHandler {
             case "AdminDeleteUser" -> handleAdminDeleteUser(request);
             case "AdminSetUserPassword" -> handleAdminSetUserPassword(request);
             case "AdminUpdateUserAttributes" -> handleAdminUpdateUserAttributes(request);
+            case "AdminDeleteUserAttributes" -> handleAdminDeleteUserAttributes(request);
             case "AdminUserGlobalSignOut" -> handleAdminUserGlobalSignOut(request);
             case "AdminEnableUser" -> handleAdminEnableUser(request);
             case "AdminDisableUser" -> handleAdminDisableUser(request);
@@ -75,6 +80,8 @@ public class CognitoJsonHandler {
             case "ConfirmForgotPassword" -> handleConfirmForgotPassword(request);
             case "GetUser" -> handleGetUser(request);
             case "UpdateUserAttributes" -> handleUpdateUserAttributes(request);
+            case "DeleteUserAttributes" -> handleDeleteUserAttributes(request);
+            case "GlobalSignOut" -> handleGlobalSignOut(request);
             case "CreateGroup" -> handleCreateGroup(request);
             case "GetGroup" -> handleGetGroup(request);
             case "ListGroups" -> handleListGroups(request);
@@ -85,6 +92,7 @@ public class CognitoJsonHandler {
             case "AdminRemoveUserFromGroup" -> handleAdminRemoveUserFromGroup(request);
             case "AdminListGroupsForUser" -> handleAdminListGroupsForUser(request);
             case "GetTokensFromRefreshToken" -> handleGetTokensFromRefreshToken(request);
+            case "RevokeToken" -> handleRevokeToken(request);
             case "ListUserPoolClientSecrets" -> handleListUserPoolClientSecrets(request);
             case "AddUserPoolClientSecret" -> handleAddUserPoolClientSecret(request);
             case "DeleteUserPoolClientSecret" -> handleDeleteUserPoolClientSecret(request);
@@ -127,6 +135,23 @@ public class CognitoJsonHandler {
         return Response.ok(response).build();
     }
 
+    private Response handleAddCustomAttributes(JsonNode request) {
+        String userPoolId = request.path("UserPoolId").asText();
+        List<Map<String, Object>> customAttributes = new java.util.ArrayList<>();
+        JsonNode attrsNode = request.path("CustomAttributes");
+        if (attrsNode.isArray()) {
+            for (JsonNode attrNode : attrsNode) {
+                Map<String, Object> attr = objectMapper.convertValue(attrNode, new TypeReference<Map<String, Object>>() {});
+                customAttributes.add(attr);
+            }
+        }
+        if (customAttributes.isEmpty() || customAttributes.size() > 25) {
+            throw new AwsException("InvalidParameterException", "CustomAttributes list size must be between 1 and 25.", 400);
+        }
+        service.addCustomAttributes(userPoolId, customAttributes);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
     private Response handleTagResource(JsonNode request) {
         @SuppressWarnings("unchecked")
         Map<String, String> tags = objectMapper.convertValue(request.path("Tags"), Map.class);
@@ -164,7 +189,35 @@ public class CognitoJsonHandler {
                 request.path("GenerateSecret").asBoolean(false),
                 request.path("AllowedOAuthFlowsUserPoolClient").asBoolean(false),
                 readStringList(request.path("AllowedOAuthFlows")),
-                readStringList(request.path("AllowedOAuthScopes"))
+                readStringList(request.path("AllowedOAuthScopes")),
+                request.path("AnalyticsConfiguration").isObject()
+                        ? objectMapper.convertValue(request.path("AnalyticsConfiguration"),
+                                new TypeReference<Map<String, Object>>() {})
+                        : null,
+                readStringList(request.path("CallbackURLs")),
+                request.path("DefaultRedirectURI").asText(null),
+                readStringList(request.path("ExplicitAuthFlows")),
+                request.has("AccessTokenValidity") ? request.path("AccessTokenValidity").asInt()
+                        : null,
+                request.has("IdTokenValidity") ? request.path("IdTokenValidity").asInt() : null,
+                readStringList(request.path("LogoutURLs")),
+                request.path("PreventUserExistenceErrors").asText(null),
+                readStringList(request.path("ReadAttributes")),
+                request.has("RefreshTokenValidity") ? request.path("RefreshTokenValidity").asInt()
+                        : null,
+                readStringList(request.path("SupportedIdentityProviders")),
+                request.path("TokenValidityUnits").isObject()
+                        ? objectMapper.convertValue(request.path("TokenValidityUnits"),
+                                new TypeReference<Map<String, String>>() {})
+                        : null,
+                readStringList(request.path("WriteAttributes")),
+                request.path("RefreshTokenRotation").isObject()
+                        ? objectMapper.convertValue(request.path("RefreshTokenRotation"),
+                                new TypeReference<Map<String, Object>>() {})
+                        : null,
+                request.has("EnableTokenRevocation")
+                        ? request.path("EnableTokenRevocation").asBoolean()
+                        : null
         );
         ObjectNode response = objectMapper.createObjectNode();
         response.set("UserPoolClient", clientToNode(client));
@@ -203,8 +256,32 @@ public class CognitoJsonHandler {
                 request.path("ClientId").asText(),
                 request.has("ClientName") ? request.path("ClientName").asText() : null,
                 request.has("AllowedOAuthFlowsUserPoolClient") ? request.path("AllowedOAuthFlowsUserPoolClient").asBoolean() : null,
-                readStringList(request.path("AllowedOAuthFlows")),
-                readStringList(request.path("AllowedOAuthScopes"))
+                request.has("AllowedOAuthFlows") ? readStringList(request.path("AllowedOAuthFlows")) : null,
+                request.has("AllowedOAuthScopes") ? readStringList(request.path("AllowedOAuthScopes")) : null,
+                request.path("AnalyticsConfiguration").isObject()
+                        ? objectMapper.convertValue(request.path("AnalyticsConfiguration"),
+                        new TypeReference<Map<String, Object>>() {})
+                        : null,
+                request.has("CallbackURLs") ? readStringList(request.path("CallbackURLs")) : null,
+                request.has("DefaultRedirectURI") ? request.path("DefaultRedirectURI").asText(null) : null,
+                request.has("ExplicitAuthFlows") ? readStringList(request.path("ExplicitAuthFlows")) : null,
+                request.has("AccessTokenValidity") ? request.path("AccessTokenValidity").asInt() : null,
+                request.has("IdTokenValidity") ? request.path("IdTokenValidity").asInt() : null,
+                request.has("LogoutURLs") ? readStringList(request.path("LogoutURLs")) : null,
+                request.has("PreventUserExistenceErrors") ? request.path("PreventUserExistenceErrors").asText(null) : null,
+                request.has("ReadAttributes") ? readStringList(request.path("ReadAttributes")) : null,
+                request.has("RefreshTokenValidity") ? request.path("RefreshTokenValidity").asInt() : null,
+                request.has("SupportedIdentityProviders") ? readStringList(request.path("SupportedIdentityProviders")) : null,
+                request.path("TokenValidityUnits").isObject()
+                        ? objectMapper.convertValue(request.path("TokenValidityUnits"),
+                        new TypeReference<Map<String, String>>() {})
+                        : null,
+                request.has("WriteAttributes") ? readStringList(request.path("WriteAttributes")) : null,
+                request.path("RefreshTokenRotation").isObject()
+                        ? objectMapper.convertValue(request.path("RefreshTokenRotation"),
+                        new TypeReference<Map<String, Object>>() {})
+                        : null,
+                request.has("EnableTokenRevocation") ? request.path("EnableTokenRevocation").asBoolean() : null
         );
         ObjectNode response = objectMapper.createObjectNode();
         response.set("UserPoolClient", clientToNode(client));
@@ -332,6 +409,14 @@ public class CognitoJsonHandler {
         return Response.ok(objectMapper.createObjectNode()).build();
     }
 
+    private Response handleAdminDeleteUserAttributes(JsonNode request) {
+        String userPoolId = request.path("UserPoolId").asText();
+        String username = request.path("Username").asText();
+        List<String> attributeNames = readStringList(request.path("UserAttributeNames"));
+        service.adminDeleteUserAttributes(userPoolId, username, attributeNames);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
     private Response handleAdminUserGlobalSignOut(JsonNode request) {
         service.adminUserGlobalSignOut(
                 request.path("UserPoolId").asText(),
@@ -365,6 +450,15 @@ public class CognitoJsonHandler {
                 request.path("RefreshToken").asText()
         );
         return Response.ok(objectMapper.valueToTree(result)).build();
+    }
+
+    private Response handleRevokeToken(JsonNode request) {
+        service.revokeToken(
+                request.path("ClientId").asText(null),
+                request.path("Token").asText(null),
+                request.path("ClientSecret").asText(null)
+        );
+        return Response.ok(objectMapper.createObjectNode()).build();
     }
 
     private Response handleInitiateAuth(JsonNode request) {
@@ -444,17 +538,23 @@ public class CognitoJsonHandler {
         ObjectNode response = objectMapper.createObjectNode();
         response.put("UserConfirmed", "CONFIRMED".equals(user.getUserStatus()));
         response.put("UserSub", user.getAttributes().get("sub"));
-        ObjectNode delivery = response.putObject("CodeDeliveryDetails");
-        delivery.put("AttributeName", "email");
-        delivery.put("DeliveryMedium", "EMAIL");
-        delivery.put("Destination", user.getAttributes().getOrDefault("email", "****"));
+        if (!"CONFIRMED".equals(user.getUserStatus())) {
+            Map<String, String> deliveryDetails = service.signUpCodeDeliveryDetails(user);
+            if (!deliveryDetails.isEmpty()) {
+                ObjectNode delivery = response.putObject("CodeDeliveryDetails");
+                delivery.put("AttributeName", deliveryDetails.get("AttributeName"));
+                delivery.put("DeliveryMedium", deliveryDetails.get("DeliveryMedium"));
+                delivery.put("Destination", deliveryDetails.get("Destination"));
+            }
+        }
         return Response.ok(response).build();
     }
 
     private Response handleConfirmSignUp(JsonNode request) {
         service.confirmSignUp(
                 request.path("ClientId").asText(),
-                request.path("Username").asText()
+                request.path("Username").asText(),
+                request.path("ConfirmationCode").asText()
         );
         return Response.ok(objectMapper.createObjectNode()).build();
     }
@@ -477,15 +577,15 @@ public class CognitoJsonHandler {
     }
 
     private Response handleForgotPassword(JsonNode request) {
-        service.forgotPassword(
+        Map<String, Object> deliveryDetails = service.forgotPassword(
                 request.path("ClientId").asText(),
                 request.path("Username").asText()
         );
         ObjectNode response = objectMapper.createObjectNode();
         ObjectNode delivery = response.putObject("CodeDeliveryDetails");
-        delivery.put("AttributeName", "email");
-        delivery.put("DeliveryMedium", "EMAIL");
-        delivery.put("Destination", "****");
+        delivery.put("AttributeName", String.valueOf(deliveryDetails.get("AttributeName")));
+        delivery.put("DeliveryMedium", String.valueOf(deliveryDetails.get("DeliveryMedium")));
+        delivery.put("Destination", String.valueOf(deliveryDetails.get("Destination")));
         return Response.ok(response).build();
     }
 
@@ -511,6 +611,18 @@ public class CognitoJsonHandler {
         ObjectNode response = objectMapper.createObjectNode();
         response.putArray("CodeDeliveryDetailsList");
         return Response.ok(response).build();
+    }
+
+    private Response handleDeleteUserAttributes(JsonNode request) {
+        String accessToken = request.path("AccessToken").asText();
+        List<String> attributeNames = readStringList(request.path("UserAttributeNames"));
+        service.deleteUserAttributes(accessToken, attributeNames);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleGlobalSignOut(JsonNode request) {
+        service.globalSignOut(request.path("AccessToken").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
     }
 
     private ObjectNode userPoolToDescriptionNode(UserPool p) {
@@ -540,15 +652,15 @@ public class CognitoJsonHandler {
         node.set("AutoVerifiedAttributes", objectMapper.valueToTree(p.getAutoVerifiedAttributes() != null ? p.getAutoVerifiedAttributes() : new java.util.ArrayList<>()));
         node.set("AliasAttributes", objectMapper.valueToTree(p.getAliasAttributes() != null ? p.getAliasAttributes() : new java.util.ArrayList<>()));
         node.set("UsernameAttributes", objectMapper.valueToTree(p.getUsernameAttributes() != null ? p.getUsernameAttributes() : new java.util.ArrayList<>()));
-        
+
         if (p.getSmsVerificationMessage() != null) node.put("SmsVerificationMessage", p.getSmsVerificationMessage());
         if (p.getEmailVerificationMessage() != null) node.put("EmailVerificationMessage", p.getEmailVerificationMessage());
         if (p.getEmailVerificationSubject() != null) node.put("EmailVerificationSubject", p.getEmailVerificationSubject());
-        
+
         node.set("VerificationMessageTemplate", objectMapper.valueToTree(p.getVerificationMessageTemplate() != null ? p.getVerificationMessageTemplate() : new HashMap<>()));
-        
+
         if (p.getSmsAuthenticationMessage() != null) node.put("SmsAuthenticationMessage", p.getSmsAuthenticationMessage());
-        
+
         node.put("MfaConfiguration", p.getMfaConfiguration() != null ? p.getMfaConfiguration() : "OFF");
         node.set("DeviceConfiguration", objectMapper.valueToTree(p.getDeviceConfiguration() != null ? p.getDeviceConfiguration() : new HashMap<>()));
         node.put("EstimatedNumberOfUsers", p.getEstimatedNumberOfUsers());
@@ -586,6 +698,42 @@ public class CognitoJsonHandler {
         c.getAllowedOAuthFlows().forEach(flows::add);
         ArrayNode scopes = node.putArray("AllowedOAuthScopes");
         c.getAllowedOAuthScopes().forEach(scopes::add);
+        Optional.ofNullable(c.getAnalyticsConfiguration())
+                .ifPresent(it -> node.set("AnalyticsConfiguration", objectMapper.valueToTree(it)));
+        ArrayNode callbackUrls = node.putArray("CallbackURLs");
+        c.getCallbackURLs().forEach(callbackUrls::add);
+        if (c.getDefaultRedirectURI() != null) {
+            node.put("DefaultRedirectURI", c.getDefaultRedirectURI());
+        }
+        ArrayNode explicitAuthFlows = node.putArray("ExplicitAuthFlows");
+        c.getExplicitAuthFlows().forEach(explicitAuthFlows::add);
+        if (c.getAccessTokenValidity() != null) {
+            node.put("AccessTokenValidity", c.getAccessTokenValidity());
+        }
+        if (c.getIdTokenValidity() != null) {
+            node.put("IdTokenValidity", c.getIdTokenValidity());
+        }
+        ArrayNode logoutUrls = node.putArray("LogoutURLs");
+        c.getLogoutURLs().forEach(logoutUrls::add);
+        if (c.getPreventUserExistenceErrors() != null) {
+            node.put("PreventUserExistenceErrors", c.getPreventUserExistenceErrors());
+        }
+        ArrayNode readAttributes = node.putArray("ReadAttributes");
+        c.getReadAttributes().forEach(readAttributes::add);
+        if (c.getRefreshTokenValidity() != null) {
+            node.put("RefreshTokenValidity", c.getRefreshTokenValidity());
+        }
+        ArrayNode supportedIdentityProviders = node.putArray("SupportedIdentityProviders");
+        c.getSupportedIdentityProviders().forEach(supportedIdentityProviders::add);
+        Optional.ofNullable(c.getTokenValidityUnits())
+                .ifPresent(it -> node.set("TokenValidityUnits", objectMapper.valueToTree(it)));
+        ArrayNode writeAttributes = node.putArray("WriteAttributes");
+        c.getWriteAttributes().forEach(writeAttributes::add);
+        Optional.ofNullable(c.getRefreshTokenRotation())
+                .ifPresent(it -> node.set("RefreshTokenRotation", objectMapper.valueToTree(it)));
+        if (c.getEnableTokenRevocation() != null) {
+            node.put("EnableTokenRevocation", c.getEnableTokenRevocation());
+        }
         node.put("CreationDate", c.getCreationDate());
         node.put("LastModifiedDate", c.getLastModifiedDate());
         return node;

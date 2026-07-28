@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.cloudwatch.logs;
 
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.cloudwatch.logs.model.LogEvent;
 import io.github.hectorvent.floci.services.cloudwatch.logs.model.LogGroup;
 import io.github.hectorvent.floci.services.cloudwatch.logs.model.LogStream;
@@ -15,6 +16,7 @@ import jakarta.ws.rs.core.Response;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +54,10 @@ public class CloudWatchLogsHandler {
             case "PutSubscriptionFilter" -> handlePutSubscriptionFilter(request, region);
             case "DescribeSubscriptionFilters" -> handleDescribeSubscriptionFilters(request, region);
             case "DeleteSubscriptionFilter" -> handleDeleteSubscriptionFilter(request, region);
+            case "GetDataProtectionPolicy" -> handleGetDataProtectionPolicy(request, region);
+            case "StartQuery" -> handleStartQuery(request, region);
+            case "GetQueryResults" -> handleGetQueryResults(request, region);
+            case "StopQuery" -> handleStopQuery(request, region);
             default -> Response.status(400)
                     .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
                     .build();
@@ -110,15 +116,17 @@ public class CloudWatchLogsHandler {
     }
 
     private Response handleDescribeLogStreams(JsonNode request, String region) {
-        String groupName = request.path("logGroupName").asText();
+        String groupName = resolveLogGroupName(request);
         String prefix = request.path("logStreamNamePrefix").asText(null);
         List<LogStream> streams = logsService.describeLogStreams(groupName, prefix, region);
 
+        String logGroupArn = logsService.buildArn(groupName, region);
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode streamsArray = objectMapper.createArrayNode();
         for (LogStream s : streams) {
             ObjectNode node = objectMapper.createObjectNode();
             node.put("logStreamName", s.getLogStreamName());
+            node.put("arn", logGroupArn + ":log-stream:" + s.getLogStreamName());
             node.put("createdTime", s.getCreatedTime());
             node.put("lastIngestionTime", s.getLastIngestionTime());
             node.put("uploadSequenceToken", s.getUploadSequenceToken());
@@ -136,7 +144,7 @@ public class CloudWatchLogsHandler {
     }
 
     private Response handlePutLogEvents(JsonNode request, String region) {
-        String groupName = request.path("logGroupName").asText();
+        String groupName = resolveLogGroupName(request);
         String streamName = request.path("logStreamName").asText();
 
         List<Map<String, Object>> events = new ArrayList<>();
@@ -154,8 +162,8 @@ public class CloudWatchLogsHandler {
     }
 
     private Response handleGetLogEvents(JsonNode request, String region) {
-        String groupName = request.path("logGroupName").asText();
-        String streamName = request.path("logStreamName").asText();
+        String groupName = resolveLogGroupName(request);
+        String streamName = resolveLogStreamName(request.path("logStreamName").asText(null));
         Long startTime = request.has("startTime") ? request.path("startTime").asLong() : null;
         Long endTime = request.has("endTime") ? request.path("endTime").asLong() : null;
         int limit = request.path("limit").asInt(0);
@@ -173,14 +181,14 @@ public class CloudWatchLogsHandler {
     }
 
     private Response handleFilterLogEvents(JsonNode request, String region) {
-        String groupName = request.path("logGroupName").asText();
+        String groupName = resolveLogGroupName(request);
         Long startTime = request.has("startTime") ? request.path("startTime").asLong() : null;
         Long endTime = request.has("endTime") ? request.path("endTime").asLong() : null;
         String filterPattern = request.path("filterPattern").asText(null);
         int limit = request.path("limit").asInt(0);
 
         List<String> streamNames = new ArrayList<>();
-        request.path("logStreamNames").forEach(n -> streamNames.add(n.asText()));
+        request.path("logStreamNames").forEach(n -> streamNames.add(resolveLogStreamName(n.asText(null))));
 
         CloudWatchLogsService.FilteredLogEventsResult result =
                 logsService.filterLogEvents(groupName, streamNames, startTime, endTime, filterPattern, limit, region);
@@ -190,6 +198,94 @@ public class CloudWatchLogsHandler {
         if (result.nextToken() != null) {
             response.put("nextToken", result.nextToken());
         }
+        return Response.ok(response).build();
+    }
+
+    // ──────────────────────────── Logs Insights Queries ────────────────────────────
+
+    private Response handleStartQuery(JsonNode request, String region) {
+        // AWS requires exactly one of logGroupName / logGroupNames / logGroupIdentifiers.
+        // The zero-selector case is enforced by the service (it throws when the resolved group
+        // list is empty); here we reject the other invalid shape: more than one selector type.
+        if (presentSelectorCount(request) > 1) {
+            throw new AwsException("InvalidParameterException",
+                    "Exactly one of logGroupName, logGroupNames, or logGroupIdentifiers may be specified.",
+                    400);
+        }
+
+        List<String> logGroupNames = new ArrayList<>();
+        request.path("logGroupNames").forEach(n -> logGroupNames.add(extractLogGroupNameFromArn(n.asText())));
+        if (request.has("logGroupName")) {
+            logGroupNames.add(extractLogGroupNameFromArn(request.path("logGroupName").asText()));
+        }
+        request.path("logGroupIdentifiers").forEach(n -> logGroupNames.add(extractLogGroupNameFromArn(n.asText())));
+
+        long startTime = request.path("startTime").asLong();
+        long endTime = request.path("endTime").asLong();
+        String queryString = request.path("queryString").asText("");
+        Integer limit = request.has("limit") ? request.path("limit").asInt() : null;
+
+        String queryId = logsService.startQuery(logGroupNames, startTime, endTime, queryString, limit, region);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("queryId", queryId);
+        return Response.ok(response).build();
+    }
+
+    /**
+     * Counts how many of the three mutually exclusive StartQuery log-group selector <em>fields</em> the
+     * request carries: {@code logGroupName}, {@code logGroupNames}, {@code logGroupIdentifiers}. A field
+     * counts if it is present at all — even a blank string or empty array — using the same presence rule
+     * ({@code has}) as the merge path below, so a serialized-but-empty selector cannot slip past the
+     * mutual-exclusivity check. A single empty/blank selector yields no groups and is rejected downstream
+     * by the service. (The AWS SDK omits unset list fields, so a well-formed single-selector request
+     * still carries exactly one field.)
+     */
+    private int presentSelectorCount(JsonNode request) {
+        int count = 0;
+        if (request.has("logGroupName")) {
+            count++;
+        }
+        if (request.has("logGroupNames")) {
+            count++;
+        }
+        if (request.has("logGroupIdentifiers")) {
+            count++;
+        }
+        return count;
+    }
+
+    private Response handleGetQueryResults(JsonNode request, String region) {
+        String queryId = request.path("queryId").asText();
+        CloudWatchLogsService.QueryState state = logsService.getQueryResults(queryId);
+
+        ArrayNode results = objectMapper.createArrayNode();
+        for (LinkedHashMap<String, String> row : state.rows()) {
+            ArrayNode rowArray = objectMapper.createArrayNode();
+            row.forEach((field, value) -> {
+                ObjectNode fieldNode = objectMapper.createObjectNode();
+                fieldNode.put("field", field);
+                fieldNode.put("value", value);
+                rowArray.add(fieldNode);
+            });
+            results.add(rowArray);
+        }
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("results", results);
+        response.put("status", state.status());
+        ObjectNode statistics = objectMapper.createObjectNode();
+        statistics.put("recordsMatched", (double) state.recordsMatched());
+        statistics.put("recordsScanned", (double) state.recordsScanned());
+        statistics.put("bytesScanned", 0.0);
+        response.set("statistics", statistics);
+        return Response.ok(response).build();
+    }
+
+    private Response handleStopQuery(JsonNode request, String region) {
+        String queryId = request.path("queryId").asText();
+        boolean success = logsService.stopQuery(queryId);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", success);
         return Response.ok(response).build();
     }
 
@@ -307,6 +403,35 @@ public class CloudWatchLogsHandler {
         String filterName = request.path("filterName").asText();
         logsService.deleteSubscriptionFilter(logGroupName, filterName, region);
         return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleGetDataProtectionPolicy(JsonNode request, String region) {
+        // Data-protection policies are not modeled. Return HTTP 200 with the resolved
+        // logGroupIdentifier and no policyDocument ("no policy set"). Real AWS returns
+        // ResourceNotFoundException (HTTP 400) when the resource does not exist — the
+        // 200-empty response is a deliberate Floci simplification for read-only callers.
+        String identifier = resolveLogGroupName(request);
+        ObjectNode response = objectMapper.createObjectNode();
+        if (identifier != null) {
+            response.put("logGroupIdentifier", identifier);
+        }
+        // policyDocument intentionally omitted -> no data-protection policy
+        return Response.ok(response).build();
+    }
+
+    private String resolveLogGroupName(JsonNode request) {
+        String name = request.path("logGroupName").asText(null);
+        if (name == null || name.isBlank()) {
+            name = request.path("logGroupIdentifier").asText(null);
+        }
+        return extractLogGroupNameFromArn(name);
+    }
+
+    private String resolveLogStreamName(String name) {
+        if (name != null && name.contains(":log-stream:")) {
+            return name.substring(name.indexOf(":log-stream:") + ":log-stream:".length());
+        }
+        return name;
     }
 
     private String extractLogGroupNameFromArn(String arn) {

@@ -16,7 +16,12 @@ public class TaskDefinition {
     private NetworkMode networkMode;
     private String cpu;
     private String memory;
+    private String taskRoleArn;
+    private String executionRoleArn;
     private List<ContainerDefinition> containerDefinitions;
+    private List<Volume> volumes;
+    private List<String> requiresCompatibilities;
+    private List<String> compatibilities;
     private Map<String, String> tags = new HashMap<>();
 
     public String getTaskDefinitionArn() { return taskDefinitionArn; }
@@ -40,10 +45,25 @@ public class TaskDefinition {
     public String getMemory() { return memory; }
     public void setMemory(String memory) { this.memory = memory; }
 
+    public String getTaskRoleArn() { return taskRoleArn; }
+    public void setTaskRoleArn(String taskRoleArn) { this.taskRoleArn = taskRoleArn; }
+
+    public String getExecutionRoleArn() { return executionRoleArn; }
+    public void setExecutionRoleArn(String executionRoleArn) { this.executionRoleArn = executionRoleArn; }
+
     public List<ContainerDefinition> getContainerDefinitions() { return containerDefinitions; }
     public void setContainerDefinitions(List<ContainerDefinition> containerDefinitions) {
         this.containerDefinitions = containerDefinitions;
     }
+
+    public List<Volume> getVolumes() { return volumes; }
+    public void setVolumes(List<Volume> volumes) { this.volumes = volumes; }
+
+    public List<String> getRequiresCompatibilities() { return requiresCompatibilities; }
+    public void setRequiresCompatibilities(List<String> requiresCompatibilities) { this.requiresCompatibilities = requiresCompatibilities; }
+
+    public List<String> getCompatibilities() { return compatibilities; }
+    public void setCompatibilities(List<String> compatibilities) { this.compatibilities = compatibilities; }
 
     public Map<String, String> getTags() { return tags; }
     public void setTags(Map<String, String> tags) { this.tags = tags; }

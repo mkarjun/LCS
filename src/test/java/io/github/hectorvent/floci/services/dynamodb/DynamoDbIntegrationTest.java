@@ -62,7 +62,8 @@ class DynamoDbIntegrationTest {
             .statusCode(200)
             .body("TableDescription.TableName", equalTo("TestTable"))
             .body("TableDescription.TableStatus", equalTo("ACTIVE"))
-            .body("TableDescription.KeySchema.size()", equalTo(2));
+            .body("TableDescription.KeySchema.size()", equalTo(2))
+            .body("TableDescription.SSEDescription", nullValue());
     }
 
     @Test
@@ -83,6 +84,83 @@ class DynamoDbIntegrationTest {
         .then()
             .statusCode(400)
             .body("__type", equalTo("ResourceInUseException"));
+    }
+
+    @Test
+    void createTableWithEnabledSseReturnsStableDescription() throws Exception {
+        Response createResponse = given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "SseTable",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST",
+                    "SSESpecification": {"Enabled": true}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("TableDescription.SSEDescription.Status", equalTo("ENABLED"))
+            .body("TableDescription.SSEDescription.SSEType", equalTo("KMS"))
+            .body("TableDescription.SSEDescription.KMSMasterKeyArn",
+                    startsWith("arn:aws:kms:us-east-1:000000000000:key/"))
+            .extract()
+            .response();
+
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode createSseDescription = mapper.readTree(createResponse.asString())
+                .path("TableDescription").path("SSEDescription");
+
+        Response firstDescribeResponse = given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DescribeTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "SseTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Table.SSEDescription.Status", equalTo("ENABLED"))
+            .body("Table.SSEDescription.SSEType", equalTo("KMS"))
+            .extract()
+            .response();
+
+        JsonNode firstDescribeSseDescription = mapper.readTree(firstDescribeResponse.asString())
+                .path("Table").path("SSEDescription");
+        assertEquals(createSseDescription, firstDescribeSseDescription);
+
+        Response secondDescribeResponse = given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DescribeTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "SseTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract()
+            .response();
+
+        JsonNode secondDescribeSseDescription = mapper.readTree(secondDescribeResponse.asString())
+                .path("Table").path("SSEDescription");
+        assertEquals(firstDescribeSseDescription, secondDescribeSseDescription);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "SseTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
     }
 
     @Test
@@ -291,6 +369,126 @@ class DynamoDbIntegrationTest {
             .statusCode(200)
             .body("Count", equalTo(3))
             .body("Items.size()", equalTo(3));
+    }
+
+    @Test
+    @Order(10)
+    void queryWithSelectSpecificAttributesAndAttributesToGet() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk",
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"}
+                    },
+                    "Select": "SPECIFIC_ATTRIBUTES",
+                    "AttributesToGet": ["pk", "sk"]
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(3))
+            .body("Items[0].size()", equalTo(2))
+            .body("Items[0].pk.S", equalTo("user-1"))
+            .body("Items[0].sk.S", equalTo("order-001"))
+            .body("Items[0].name", nullValue())
+            .body("Items[0].age", nullValue())
+            .body("Items[0].total", nullValue())
+            .body("Items[1].size()", equalTo(2))
+            .body("Items[1].pk.S", equalTo("user-1"))
+            .body("Items[1].sk.S", equalTo("order-002"))
+            .body("Items[1].total", nullValue())
+            .body("Items[2].size()", equalTo(2))
+            .body("Items[2].pk.S", equalTo("user-1"))
+            .body("Items[2].sk.S", equalTo("profile"))
+            .body("Items[2].name", nullValue())
+            .body("Items[2].age", nullValue());
+    }
+
+    @Test
+    @Order(10)
+    void queryWithSelectSpecificAttributesAndProjectionExpression() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk",
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"}
+                    },
+                    "Select": "SPECIFIC_ATTRIBUTES",
+                    "ProjectionExpression": "pk, sk"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(3))
+            .body("Items[0].size()", equalTo(2))
+            .body("Items[0].pk.S", equalTo("user-1"))
+            .body("Items[0].sk.S", equalTo("order-001"))
+            .body("Items[0].name", nullValue())
+            .body("Items[0].age", nullValue())
+            .body("Items[0].total", nullValue());
+    }
+
+    @Test
+    @Order(10)
+    void queryWithSelectSpecificAttributesRequiresProjectionParameters() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk",
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"}
+                    },
+                    "Select": "SPECIFIC_ATTRIBUTES"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ValidationException"))
+            .body("message", equalTo("Select type SPECIFIC_ATTRIBUTES requires the ProjectionExpression to be provided."));
+    }
+
+    @Test
+    @Order(10)
+    void queryWithProjectionExpressionAndAttributesToGetFails() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk",
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"}
+                    },
+                    "Select": "SPECIFIC_ATTRIBUTES",
+                    "ProjectionExpression": "pk, sk",
+                    "AttributesToGet": ["pk", "sk"]
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ValidationException"))
+            .body("message", equalTo("Can not use both expression and non-expression parameters in the same request: "
+                    + "Non-expression parameters: {AttributesToGet} Expression parameters: {ProjectionExpression}"));
     }
 
     @Test
@@ -1031,6 +1229,130 @@ class DynamoDbIntegrationTest {
             .contentType(DYNAMODB_CONTENT_TYPE)
             .body("""
                 {"TableName": "ListAppendTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    void updateItemListAppendAgainstNullAttributeReturnsValidationException() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "NullListAppendTable",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "NullListAppendTable",
+                    "Item": {"pk": {"S": "row-1"}, "Tags": {"NULL": true}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "NullListAppendTable",
+                    "Key": {"pk": {"S": "row-1"}},
+                    "UpdateExpression": "SET #t = list_append(#t, :new)",
+                    "ExpressionAttributeNames": {"#t": "Tags"},
+                    "ExpressionAttributeValues": {":new": {"L": [{"S": "tag-a"}]}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ValidationException"));
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "NullListAppendTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    void updateItemListAppendAgainstMissingAttributeReturnsValidationException() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "MissingListAppendTable",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "MissingListAppendTable",
+                    "Item": {"pk": {"S": "row-1"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "MissingListAppendTable",
+                    "Key": {"pk": {"S": "row-1"}},
+                    "UpdateExpression": "SET #t = list_append(#t, :new)",
+                    "ExpressionAttributeNames": {"#t": "Tags"},
+                    "ExpressionAttributeValues": {":new": {"L": [{"S": "tag-a"}]}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ValidationException"));
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "MissingListAppendTable"}
                 """)
         .when()
             .post("/")
@@ -1996,7 +2318,8 @@ given()
             .statusCode(200)
             .body("Table.DeletionProtectionEnabled", equalTo(true));
 
-        // DeleteTable is blocked
+        // DeleteTable is blocked. AWS returns a ValidationException (not
+        // ResourceInUseException) when deletion protection is enabled.
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
             .contentType(DYNAMODB_CONTENT_TYPE)
@@ -2006,7 +2329,7 @@ given()
         .when().post("/")
         .then()
             .statusCode(400)
-            .body("__type", equalTo("ResourceInUseException"));
+            .body("__type", equalTo("ValidationException"));
 
         // UpdateTable to disable deletion protection
         given()
@@ -2260,6 +2583,82 @@ given()
                 "Second page should return the remaining 1 item");
 
         // Cleanup
+        deleteTable(tableName);
+    }
+
+    // Reproduces #1604
+    @Test
+    void transactWriteCancellationReasonMessageIsNullForNonFailedItems() {
+        String tableName = "TxCancelMsgTest";
+
+        given()
+                .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+                .contentType(DYNAMODB_CONTENT_TYPE)
+                .body("""
+                        {
+                            "TableName": "%s",
+                            "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                            "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                            "BillingMode": "PAY_PER_REQUEST"
+                        }
+                        """.formatted(tableName))
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200);
+
+        given()
+                .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+                .contentType(DYNAMODB_CONTENT_TYPE)
+                .body("""
+                        {
+                            "TableName": "%s",
+                            "Item": {"pk": {"S": "A"}}
+                        }
+                        """.formatted(tableName))
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200);
+
+        // item 0 passes (A exists), item 1 fails (B absent)
+        given()
+                .header("X-Amz-Target", "DynamoDB_20120810.TransactWriteItems")
+                .contentType(DYNAMODB_CONTENT_TYPE)
+                .body("""
+                        {
+                            "TransactItems": [
+                                {
+                                    "ConditionCheck": {
+                                        "TableName": "%s",
+                                        "Key": {"pk": {"S": "A"}},
+                                        "ConditionExpression": "attribute_exists(pk)"
+                                    }
+                                },
+                                {
+                                    "ConditionCheck": {
+                                        "TableName": "%s",
+                                        "Key": {"pk": {"S": "B"}},
+                                        "ConditionExpression": "attribute_exists(pk)"
+                                    }
+                                }
+                            ]
+                        }
+                        """.formatted(tableName, tableName))
+                .when()
+                .post("/")
+                .then()
+                .statusCode(400)
+                .body("__type", equalTo("TransactionCanceledException"))
+                .body("CancellationReasons[0].Code", equalTo("None"))
+                .body("CancellationReasons[0].Message", nullValue())
+                .body("CancellationReasons[1].Code", equalTo("ConditionalCheckFailed"));
+
+        // Cleanup
+        deleteTable(tableName);
+    }
+
+    private void deleteTable(String tableName) {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
             .contentType(DYNAMODB_CONTENT_TYPE)

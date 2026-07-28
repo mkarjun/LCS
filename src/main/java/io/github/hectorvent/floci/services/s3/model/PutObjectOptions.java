@@ -12,8 +12,18 @@ public class PutObjectOptions {
     private String contentDisposition;
     private String cacheControl;
     private String serverSideEncryption;
+    private String sseCustomerAlgorithm;
+    private String sseCustomerKey;
+    private String sseCustomerKeyMd5;
     private String acl;
+    private String grantRead;
+    private String grantWrite;
+    private String grantFullControl;
+    private String grantReadAcp;
+    private String grantWriteAcp;
     private String checksumAlgorithm;
+    private String ifMatch;
+    private String ifNoneMatch;
     private Map<String, String> tagging;
 
     public String getStorageClass() { return storageClass; }
@@ -40,11 +50,41 @@ public class PutObjectOptions {
     public String getServerSideEncryption() { return serverSideEncryption; }
     public PutObjectOptions withServerSideEncryption(String serverSideEncryption) { this.serverSideEncryption = serverSideEncryption; return this; }
 
+    public String getSseCustomerAlgorithm() { return sseCustomerAlgorithm; }
+    public PutObjectOptions withSseCustomerAlgorithm(String sseCustomerAlgorithm) { this.sseCustomerAlgorithm = sseCustomerAlgorithm; return this; }
+
+    public String getSseCustomerKey() { return sseCustomerKey; }
+    public PutObjectOptions withSseCustomerKey(String sseCustomerKey) { this.sseCustomerKey = sseCustomerKey; return this; }
+
+    public String getSseCustomerKeyMd5() { return sseCustomerKeyMd5; }
+    public PutObjectOptions withSseCustomerKeyMd5(String sseCustomerKeyMd5) { this.sseCustomerKeyMd5 = sseCustomerKeyMd5; return this; }
+
     public String getAcl() { return acl; }
     public PutObjectOptions withAcl(String acl) { this.acl = acl; return this; }
 
+    public String getGrantRead() { return grantRead; }
+    public PutObjectOptions withGrantRead(String grantRead) { this.grantRead = grantRead; return this; }
+
+    public String getGrantWrite() { return grantWrite; }
+    public PutObjectOptions withGrantWrite(String grantWrite) { this.grantWrite = grantWrite; return this; }
+
+    public String getGrantFullControl() { return grantFullControl; }
+    public PutObjectOptions withGrantFullControl(String grantFullControl) { this.grantFullControl = grantFullControl; return this; }
+
+    public String getGrantReadAcp() { return grantReadAcp; }
+    public PutObjectOptions withGrantReadAcp(String grantReadAcp) { this.grantReadAcp = grantReadAcp; return this; }
+
+    public String getGrantWriteAcp() { return grantWriteAcp; }
+    public PutObjectOptions withGrantWriteAcp(String grantWriteAcp) { this.grantWriteAcp = grantWriteAcp; return this; }
+
     public String getChecksumAlgorithm() { return checksumAlgorithm; }
     public PutObjectOptions withChecksumAlgorithm(String checksumAlgorithm) { this.checksumAlgorithm = checksumAlgorithm; return this; }
+
+    public String getIfMatch() { return ifMatch; }
+    public PutObjectOptions withIfMatch(String ifMatch) { this.ifMatch = ifMatch; return this; }
+
+    public String getIfNoneMatch() { return ifNoneMatch; }
+    public PutObjectOptions withIfNoneMatch(String ifNoneMatch) { this.ifNoneMatch = ifNoneMatch; return this; }
 
     public Map<String, String> getTagging() { return tagging; }
     public PutObjectOptions withTagging(Map<String, String> tagging) { this.tagging = tagging; return this; }

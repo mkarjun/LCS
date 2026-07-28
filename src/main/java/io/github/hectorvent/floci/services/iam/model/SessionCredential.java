@@ -10,10 +10,16 @@ import java.time.Instant;
 public class SessionCredential {
 
     private String accessKeyId;
+    private String secretAccessKey;
     private String roleArn;
     private Instant expiration;
     /** Inline session policy passed to AssumeRole/GetFederationToken — further restricts role policies. */
     private String sessionPolicyDocument;
+    /**
+     * Account of the caller that minted this session, captured at mint time. Used to route
+     * temporary credentials that carry no role ARN (e.g. GetSessionToken) back to the caller.
+     */
+    private String originAccountId;
 
     public SessionCredential() {}
 
@@ -30,8 +36,30 @@ public class SessionCredential {
         this.sessionPolicyDocument = sessionPolicyDocument;
     }
 
+    public SessionCredential(String accessKeyId, String secretAccessKey, String roleArn, Instant expiration,
+                              String sessionPolicyDocument) {
+        this.accessKeyId = accessKeyId;
+        this.secretAccessKey = secretAccessKey;
+        this.roleArn = roleArn;
+        this.expiration = expiration;
+        this.sessionPolicyDocument = sessionPolicyDocument;
+    }
+
+    public SessionCredential(String accessKeyId, String secretAccessKey, String roleArn, Instant expiration,
+                              String sessionPolicyDocument, String originAccountId) {
+        this.accessKeyId = accessKeyId;
+        this.secretAccessKey = secretAccessKey;
+        this.roleArn = roleArn;
+        this.expiration = expiration;
+        this.sessionPolicyDocument = sessionPolicyDocument;
+        this.originAccountId = originAccountId;
+    }
+
     public String getAccessKeyId() { return accessKeyId; }
     public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
+
+    public String getSecretAccessKey() { return secretAccessKey; }
+    public void setSecretAccessKey(String secretAccessKey) { this.secretAccessKey = secretAccessKey; }
 
     public String getRoleArn() { return roleArn; }
     public void setRoleArn(String roleArn) { this.roleArn = roleArn; }
@@ -41,4 +69,7 @@ public class SessionCredential {
 
     public String getSessionPolicyDocument() { return sessionPolicyDocument; }
     public void setSessionPolicyDocument(String sessionPolicyDocument) { this.sessionPolicyDocument = sessionPolicyDocument; }
+
+    public String getOriginAccountId() { return originAccountId; }
+    public void setOriginAccountId(String originAccountId) { this.originAccountId = originAccountId; }
 }

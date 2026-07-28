@@ -138,7 +138,26 @@ export const SERVICE_CATALOG: CatalogEntry[] = [
 
   // Storage
   { id: "s3", name: "Amazon S3", shortName: "S3", category: "Storage", description: "Scalable storage in the cloud" },
+  { id: "s3vectors", name: "Amazon S3 Vectors", shortName: "S3 Vectors", category: "Storage", description: "Vector storage and similarity search on S3" },
   { id: "transfer", name: "AWS Transfer Family", shortName: "Transfer Family", category: "Storage", description: "Managed file transfers over SFTP, FTPS, and FTP" },
+
+  // Added by the upstream Floci merge (52 -> 68 services).
+  { id: "mq", name: "Amazon MQ", shortName: "Amazon MQ", category: "Application Integration", description: "Managed message broker for RabbitMQ and ActiveMQ" },
+  { id: "appsync", name: "AWS AppSync", shortName: "AppSync", category: "Front-end Web & Mobile", description: "Managed GraphQL APIs" },
+  { id: "batch", name: "AWS Batch", shortName: "Batch", category: "Compute", description: "Run batch computing workloads" },
+  { id: "cloudcontrol", name: "AWS Cloud Control API", shortName: "Cloud Control API", category: "Management & Governance", description: "Uniform CRUD APIs across AWS resources" },
+  { id: "servicediscovery", name: "AWS Cloud Map", shortName: "Cloud Map", category: "Networking & Content Delivery", description: "Service discovery for cloud resources" },
+  { id: "cloudtrail", name: "AWS CloudTrail", shortName: "CloudTrail", category: "Management & Governance", description: "Track user activity and API usage" },
+  { id: "codepipeline", name: "AWS CodePipeline", shortName: "CodePipeline", category: "Developer Tools", description: "Automate continuous delivery pipelines" },
+  { id: "docdb", name: "Amazon DocumentDB", shortName: "DocumentDB", category: "Database", description: "Managed document database with MongoDB compatibility" },
+  { id: "elasticbeanstalk", name: "AWS Elastic Beanstalk", shortName: "Elastic Beanstalk", category: "Compute", description: "Deploy and scale web applications" },
+  { id: "elasticmapreduce", name: "Amazon EMR", shortName: "EMR", category: "Analytics", description: "Managed big data platform" },
+  { id: "iot", name: "AWS IoT Core", shortName: "IoT Core", category: "Application Integration", description: "Connect and manage IoT devices" },
+  { id: "iotdata", name: "AWS IoT Core Data Plane", shortName: "IoT Data", category: "Application Integration", description: "Publish and subscribe to device shadows and MQTT topics" },
+  { id: "lightsail", name: "Amazon Lightsail", shortName: "Lightsail", category: "Compute", description: "Simple virtual private servers" },
+  { id: "memorydb", name: "Amazon MemoryDB", shortName: "MemoryDB", category: "Database", description: "Durable in-memory database with Redis compatibility" },
+  { id: "rds-data", name: "Amazon RDS Data API", shortName: "RDS Data API", category: "Database", description: "Run SQL over HTTP against RDS databases" },
+  { id: "wafv2", name: "AWS WAF", shortName: "WAF", category: "Security, Identity, & Compliance", description: "Protect web applications from common exploits" },
 ];
 
 export function servicePath(entry: CatalogEntry): string {

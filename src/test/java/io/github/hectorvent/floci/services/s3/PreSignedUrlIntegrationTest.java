@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
@@ -18,6 +20,9 @@ import static org.junit.jupiter.api.Assertions.*;
 class PreSignedUrlIntegrationTest {
 
     private static final String BUCKET = "presign-test-bucket";
+
+    private static final String AUTH_HEADER =
+            "AWS4-HMAC-SHA256 Credential=test/20260205/us-east-1/s3/aws4_request";
 
     @Inject
     PreSignedUrlGenerator presignGenerator;
@@ -67,6 +72,19 @@ class PreSignedUrlIntegrationTest {
         assertTrue(url.contains("X-Amz-Expires=300"));
         assertTrue(url.contains("X-Amz-SignedHeaders=host"));
         assertTrue(url.contains("X-Amz-Signature="));
+
+        // Verify X-Amz-Credential uses request-scoped account ID, not the hardcoded placeholder
+        assertFalse(url.contains("AKIAIOSFODNN7EXAMPLE"),
+                "X-Amz-Credential must not contain hardcoded AKIAIOSFODNN7EXAMPLE");
+
+        int credStart = url.indexOf("X-Amz-Credential=");
+        int credEnd = url.indexOf("&", credStart);
+        String encodedCredential = credEnd > 0
+                ? url.substring(credStart + "X-Amz-Credential=".length(), credEnd)
+                : url.substring(credStart + "X-Amz-Credential=".length());
+        String credential = URLDecoder.decode(encodedCredential, StandardCharsets.UTF_8);
+        assertTrue(credential.startsWith("000000000000/"),
+                "X-Amz-Credential should start with 12-digit account ID, got: " + credential);
     }
 
     @Test
@@ -138,8 +156,10 @@ class PreSignedUrlIntegrationTest {
     @Order(11)
     void getObjectAppliesResponseContentDispositionOverride() {
         // Stored disposition is "inline"; override should win.
+        // Must be a signed request per AWS spec (response-* params require Authorization or presigned URL).
         given()
             .urlEncodingEnabled(false)
+            .header("Authorization", AUTH_HEADER)
         .when()
             .get("/" + BUCKET + "/disposition-file.txt?response-content-disposition=attachment%3B%20filename%3D%22file.txt%22")
         .then()
@@ -152,6 +172,7 @@ class PreSignedUrlIntegrationTest {
     void getObjectAppliesAllResponseOverrides() {
         given()
             .urlEncodingEnabled(false)
+            .header("Authorization", AUTH_HEADER)
         .when()
             .get("/" + BUCKET + "/disposition-file.txt"
                 + "?response-content-type=application%2Fpdf"
@@ -187,6 +208,7 @@ class PreSignedUrlIntegrationTest {
     void headObjectAppliesResponseContentDispositionOverride() {
         given()
             .urlEncodingEnabled(false)
+            .header("Authorization", AUTH_HEADER)
         .when()
             .head("/" + BUCKET + "/disposition-file.txt?response-content-disposition=attachment%3B%20filename%3D%22head.txt%22")
         .then()
@@ -212,6 +234,7 @@ class PreSignedUrlIntegrationTest {
     void rangeRequestAppliesResponseContentDispositionOverride() {
         given()
             .urlEncodingEnabled(false)
+            .header("Authorization", AUTH_HEADER)
             .header("Range", "bytes=0-3")
         .when()
             .get("/" + BUCKET + "/disposition-file.txt?response-content-disposition=attachment%3B%20filename%3D%22range.txt%22")

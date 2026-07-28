@@ -5,11 +5,19 @@
 
 ## Supported Actions
 
+<!-- floci:actions:start -->
 | Action | Description |
-|---|---|
+| --- | --- |
 | `CreateKey` | Create a new KMS key |
+| `GenerateRandom` | Generate random bytes |
+| `GetPublicKey` | Get public key material for asymmetric keys |
 | `DescribeKey` | Get key metadata |
 | `ListKeys` | List all keys |
+| `CreateGrant` | Create a grant for a KMS key |
+| `ListGrants` | List grants for a KMS key |
+| `ListRetirableGrants` | List grants retirable by a principal |
+| `RevokeGrant` | Revoke (administratively delete) a grant |
+| `RetireGrant` | Retire a grant (token- or key+grant-based) |
 | `Encrypt` | Encrypt plaintext with a key |
 | `Decrypt` | Decrypt ciphertext |
 | `ReEncrypt` | Re-encrypt under a different key |
@@ -17,6 +25,8 @@
 | `GenerateDataKeyWithoutPlaintext` | Generate only the encrypted data key |
 | `Sign` | Sign a message with an asymmetric key |
 | `Verify` | Verify a signature |
+| `GenerateMac` | Generate a MAC with an HMAC key |
+| `VerifyMac` | Verify a MAC with an HMAC key |
 | `CreateAlias` | Create a friendly name for a key |
 | `DeleteAlias` | Remove an alias |
 | `ListAliases` | List all aliases |
@@ -27,10 +37,18 @@
 | `ListResourceTags` | List tags |
 | `GetKeyPolicy` | Get a key's resource policy |
 | `PutKeyPolicy` | Update a key's resource policy |
+| `UpdateKeyDescription` | Update a key's description |
 | `GetKeyRotationStatus` | Check if automatic key rotation is enabled |
 | `EnableKeyRotation` | Enable automatic key rotation (symmetric keys only) |
 | `DisableKeyRotation` | Disable automatic key rotation |
+| `EnableKey` | Enable a key |
+| `DisableKey` | Disable a key |
 | `RotateKeyOnDemand` | Rotate key material on demand (symmetric keys only) |
+<!-- floci:actions:end -->
+
+## Grant Support Scope
+
+Grant lifecycle operations (`CreateGrant`, `ListGrants`, `ListRetirableGrants`, `RevokeGrant`, `RetireGrant`) are supported. However, grant lifecycle support **does not** imply grant-based authorization enforcement on cryptographic operations (`Encrypt`, `Decrypt`, `Sign`, `Verify`, `GenerateDataKey`, etc.). Grants are stored and queryable but are not evaluated during crypto operations.
 
 ## Configuration
 

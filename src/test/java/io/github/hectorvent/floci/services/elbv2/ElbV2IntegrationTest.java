@@ -18,6 +18,10 @@ class ElbV2IntegrationTest {
 
     private static final String AUTH =
             "AWS4-HMAC-SHA256 Credential=test/20260427/us-east-1/elasticloadbalancing/aws4_request";
+    private static final String EC2_AUTH =
+            "AWS4-HMAC-SHA256 Credential=test/20260427/us-east-1/ec2/aws4_request";
+    private static final String ELB_V2_XMLNS =
+            "https://elasticloadbalancing.amazonaws.com/doc/2015-12-01/";
 
     private static String lbArn;
     private static String tgArn;
@@ -36,6 +40,8 @@ class ElbV2IntegrationTest {
                 .formParam("Type", "application")
                 .formParam("Scheme", "internet-facing")
                 .formParam("IpAddressType", "ipv4")
+                .formParam("Subnets.member.1", "subnet-default-a")
+                .formParam("Subnets.member.2", "subnet-default-b")
                 .header("Authorization", AUTH)
             .when()
                 .post("/")
@@ -50,8 +56,10 @@ class ElbV2IntegrationTest {
                         equalTo("internet-facing"))
                 .body("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.State.Code",
                         equalTo("provisioning"))
+                .body("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.AvailabilityZones.member.SubnetId",
+                        hasItems("subnet-default-a", "subnet-default-b"))
                 .body("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.DNSName",
-                        containsString(".elb.localhost"))
+                        containsString(".elb.localhost.floci.io"))
                 .extract()
                 .path("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.LoadBalancerArn");
     }
@@ -70,7 +78,9 @@ class ElbV2IntegrationTest {
                 .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.LoadBalancerArn",
                         equalTo(lbArn))
                 .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.State.Code",
-                        equalTo("active"));
+                        equalTo("active"))
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.AvailabilityZones.member.SubnetId",
+                        hasItems("subnet-default-a", "subnet-default-b"));
     }
 
     @Test
@@ -167,10 +177,365 @@ class ElbV2IntegrationTest {
                 .body("ErrorResponse.Error.Code", equalTo("LoadBalancerNotFound"));
     }
 
+    @Test
+    @Order(9)
+    void createAndDescribeLoadBalancerWithSubnetsExposeSubnetAndZoneName() {
+        String subnetAwareLbArn = given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "lb-with-subnets")
+                .formParam("Type", "application")
+                .formParam("Subnets.member.1", "subnet-default-a")
+                .formParam("Subnets.member.2", "subnet-default-b")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .contentType("application/xml")
+                .body("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.AvailabilityZones.member.size()",
+                        equalTo(2))
+                .body("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.AvailabilityZones.member[0].SubnetId",
+                        equalTo("subnet-default-a"))
+                .body("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.AvailabilityZones.member[0].ZoneName",
+                        equalTo("us-east-1a"))
+                .body("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.AvailabilityZones.member[1].SubnetId",
+                        equalTo("subnet-default-b"))
+                .body("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.AvailabilityZones.member[1].ZoneName",
+                        equalTo("us-east-1b"))
+                .extract()
+                .path("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.LoadBalancerArn");
+
+        given()
+                .formParam("Action", "DescribeLoadBalancers")
+                .formParam("LoadBalancerArns.member.1", subnetAwareLbArn)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.AvailabilityZones.member.size()",
+                        equalTo(2))
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.AvailabilityZones.member[0].SubnetId",
+                        equalTo("subnet-default-a"))
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.AvailabilityZones.member[0].ZoneName",
+                        equalTo("us-east-1a"))
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.AvailabilityZones.member[1].SubnetId",
+                        equalTo("subnet-default-b"))
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.AvailabilityZones.member[1].ZoneName",
+                        equalTo("us-east-1b"));
+    }
+
+    @Test
+    @Order(9)
+    void setSubnetsReturnsEmptyResultEnvelope() {
+        given()
+                .formParam("Action", "SetSubnets")
+                .formParam("LoadBalancerArn", lbArn)
+                .formParam("Subnets.member.1", "subnet-default-b")
+                .formParam("Subnets.member.2", "subnet-default-c")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .contentType("application/xml")
+                .body(containsString("<SetSubnetsResponse xmlns=\"" + ELB_V2_XMLNS + "\">"))
+                .body(containsString("<SetSubnetsResult></SetSubnetsResult>"))
+                .body("SetSubnetsResponse.ResponseMetadata.RequestId", not(emptyOrNullString()));
+
+        given()
+                .formParam("Action", "DescribeLoadBalancers")
+                .formParam("LoadBalancerArns.member.1", lbArn)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.AvailabilityZones.member.SubnetId",
+                        hasItems("subnet-default-b", "subnet-default-c"));
+    }
+
     // ── Target Groups ─────────────────────────────────────────────────────────
 
     @Test
     @Order(10)
+    void createLoadBalancerWithSubnetsFromDifferentVpcsThrows() {
+        String otherVpcId = given()
+                .formParam("Action", "CreateVpc")
+                .formParam("CidrBlock", "10.0.0.0/16")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateVpcResponse.vpc.vpcId");
+
+        String otherSubnetId = given()
+                .formParam("Action", "CreateSubnet")
+                .formParam("VpcId", otherVpcId)
+                .formParam("CidrBlock", "10.0.1.0/24")
+                .formParam("AvailabilityZone", "us-east-1a")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateSubnetResponse.subnet.subnetId");
+
+        given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "mixed-vpc-lb")
+                .formParam("Type", "application")
+                .formParam("Subnets.member.1", "subnet-default-a")
+                .formParam("Subnets.member.2", otherSubnetId)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("InvalidConfigurationRequest"));
+    }
+
+    @Test
+    @Order(11)
+    void setSubnetsWithSubnetsFromDifferentVpcsThrows() {
+        String otherVpcId = given()
+                .formParam("Action", "CreateVpc")
+                .formParam("CidrBlock", "10.1.0.0/16")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateVpcResponse.vpc.vpcId");
+
+        String otherSubnetId = given()
+                .formParam("Action", "CreateSubnet")
+                .formParam("VpcId", otherVpcId)
+                .formParam("CidrBlock", "10.1.1.0/24")
+                .formParam("AvailabilityZone", "us-east-1b")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateSubnetResponse.subnet.subnetId");
+
+        String subnetLbArn = given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "set-subnets-test-lb")
+                .formParam("Type", "application")
+                .formParam("Subnets.member.1", "subnet-default-a")
+                .formParam("Subnets.member.2", "subnet-default-b")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.LoadBalancerArn");
+
+        given()
+                .formParam("Action", "SetSubnets")
+                .formParam("LoadBalancerArn", subnetLbArn)
+                .formParam("Subnets.member.1", "subnet-default-a")
+                .formParam("Subnets.member.2", otherSubnetId)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("InvalidConfigurationRequest"));
+    }
+
+    @Test
+    @Order(12)
+    void createLoadBalancerWithSingleSubnetThrowsInvalidConfigurationRequest() {
+        given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "single-subnet-lb")
+                .formParam("Type", "application")
+                .formParam("Subnets.member.1", "subnet-default-a")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("InvalidConfigurationRequest"));
+    }
+
+    @Test
+    @Order(13)
+    void createLoadBalancerWithSubnetsInSameAvailabilityZoneThrowsInvalidConfigurationRequest() {
+        String secondSubnetId = given()
+                .formParam("Action", "CreateSubnet")
+                .formParam("VpcId", "vpc-default")
+                .formParam("CidrBlock", "172.31.64.0/24")
+                .formParam("AvailabilityZone", "us-east-1a")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateSubnetResponse.subnet.subnetId");
+
+        given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "duplicate-az-lb")
+                .formParam("Type", "application")
+                .formParam("Subnets.member.1", "subnet-default-a")
+                .formParam("Subnets.member.2", secondSubnetId)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("InvalidConfigurationRequest"));
+    }
+
+    @Test
+    @Order(14)
+    void setSubnetsWithSubnetsInSameAvailabilityZoneThrowsInvalidConfigurationRequest() {
+        String secondSubnetId = given()
+                .formParam("Action", "CreateSubnet")
+                .formParam("VpcId", "vpc-default")
+                .formParam("CidrBlock", "172.31.65.0/24")
+                .formParam("AvailabilityZone", "us-east-1a")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateSubnetResponse.subnet.subnetId");
+
+        String subnetlessLbArn = given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "set-duplicate-az-lb")
+                .formParam("Type", "application")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.LoadBalancerArn");
+
+        given()
+                .formParam("Action", "SetSubnets")
+                .formParam("LoadBalancerArn", subnetlessLbArn)
+                .formParam("Subnets.member.1", "subnet-default-a")
+                .formParam("Subnets.member.2", secondSubnetId)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("InvalidConfigurationRequest"));
+    }
+
+    @Test
+    @Order(15)
+    void setSubnetsAfterSubnetlessCreateCanAdoptCustomVpc() {
+        String customVpcId = given()
+                .formParam("Action", "CreateVpc")
+                .formParam("CidrBlock", "10.2.0.0/16")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateVpcResponse.vpc.vpcId");
+
+        String customSubnetAId = given()
+                .formParam("Action", "CreateSubnet")
+                .formParam("VpcId", customVpcId)
+                .formParam("CidrBlock", "10.2.1.0/24")
+                .formParam("AvailabilityZone", "us-east-1b")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateSubnetResponse.subnet.subnetId");
+
+        String customSubnetBId = given()
+                .formParam("Action", "CreateSubnet")
+                .formParam("VpcId", customVpcId)
+                .formParam("CidrBlock", "10.2.2.0/24")
+                .formParam("AvailabilityZone", "us-east-1c")
+                .header("Authorization", EC2_AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateSubnetResponse.subnet.subnetId");
+
+        String subnetlessLbArn = given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "subnetless-adopt-vpc-lb")
+                .formParam("Type", "application")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.LoadBalancerArn");
+
+        given()
+                .formParam("Action", "SetSubnets")
+                .formParam("LoadBalancerArn", subnetlessLbArn)
+                .formParam("Subnets.member.1", customSubnetAId)
+                .formParam("Subnets.member.2", customSubnetBId)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200);
+
+        given()
+                .formParam("Action", "DescribeLoadBalancers")
+                .formParam("LoadBalancerArns.member.1", subnetlessLbArn)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.VpcId",
+                        equalTo(customVpcId))
+                .body("DescribeLoadBalancersResponse.DescribeLoadBalancersResult.LoadBalancers.member.AvailabilityZones.member.size()",
+                        equalTo(2));
+    }
+
+    @Test
+    @Order(16)
+    void createLoadBalancerWithMissingSubnetThrowsSubnetNotFound() {
+        given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "missing-subnet-lb")
+                .formParam("Type", "application")
+                .formParam("Subnets.member.1", "subnet-does-not-exist")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("SubnetNotFound"));
+    }
+
+    // ── Target Groups ─────────────────────────────────────────────────────────
+
+    @Test
+    @Order(20)
     void createTargetGroup() {
         tgArn = given()
                 .formParam("Action", "CreateTargetGroup")
@@ -201,7 +566,7 @@ class ElbV2IntegrationTest {
     }
 
     @Test
-    @Order(11)
+    @Order(21)
     void describeTargetGroups() {
         given()
                 .formParam("Action", "DescribeTargetGroups")
@@ -216,7 +581,7 @@ class ElbV2IntegrationTest {
     }
 
     @Test
-    @Order(12)
+    @Order(22)
     void duplicateTargetGroupNameThrows() {
         given()
                 .formParam("Action", "CreateTargetGroup")
@@ -230,7 +595,7 @@ class ElbV2IntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(23)
     void modifyTargetGroupAttributes() {
         given()
                 .formParam("Action", "ModifyTargetGroupAttributes")
@@ -246,10 +611,39 @@ class ElbV2IntegrationTest {
                         equalTo("deregistration_delay.timeout_seconds"));
     }
 
+    @Test
+    @Order(24)
+    void describeTargetGroupsByMissingNameThrows() {
+        given()
+                .formParam("Action", "DescribeTargetGroups")
+                .formParam("Names.member.1", "target-group-that-does-not-exist")
+                .header("Authorization", AUTH)
+                .when()
+                .post("/")
+                .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("TargetGroupNotFound"));
+    }
+
+    @Test
+    @Order(25)
+    void describeTargetGroupsByMissingArnThrows() {
+        given()
+                .formParam("Action", "DescribeTargetGroups")
+                .formParam("TargetGroupArns.member.1",
+                        "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/missing/0123456789abcdef")
+                .header("Authorization", AUTH)
+                .when()
+                .post("/")
+                .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("TargetGroupNotFound"));
+    }
+
     // ── Targets ───────────────────────────────────────────────────────────────
 
     @Test
-    @Order(20)
+    @Order(26)
     void registerTargets() {
         given()
                 .formParam("Action", "RegisterTargets")
@@ -266,7 +660,7 @@ class ElbV2IntegrationTest {
     }
 
     @Test
-    @Order(21)
+    @Order(27)
     void describeTargetHealthReturnsInitial() {
         given()
                 .formParam("Action", "DescribeTargetHealth")
@@ -280,6 +674,27 @@ class ElbV2IntegrationTest {
                         equalTo("initial"))
                 .body("DescribeTargetHealthResponse.DescribeTargetHealthResult.TargetHealthDescriptions.member[0].TargetHealth.Reason",
                         equalTo("Elb.RegistrationInProgress"));
+    }
+
+    @Test
+    @Order(28)
+    void describeTargetHealthReturnsUnusedForExplicitUnregisteredTarget() {
+        given()
+                .formParam("Action", "DescribeTargetHealth")
+                .formParam("TargetGroupArn", tgArn)
+                .formParam("Targets.member.1.Id", "i-1234567890abcdef0")
+                .formParam("Targets.member.1.Port", "80")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body("DescribeTargetHealthResponse.DescribeTargetHealthResult.TargetHealthDescriptions.member.TargetHealth.State",
+                        equalTo("unused"))
+                .body("DescribeTargetHealthResponse.DescribeTargetHealthResult.TargetHealthDescriptions.member.TargetHealth.Reason",
+                        equalTo("Target.NotRegistered"))
+                .body("DescribeTargetHealthResponse.DescribeTargetHealthResult.TargetHealthDescriptions.member.TargetHealth.Description",
+                        equalTo("Target is not registered to the target group"));
     }
 
     // ── Listeners ─────────────────────────────────────────────────────────────
@@ -575,7 +990,8 @@ class ElbV2IntegrationTest {
                 .body("DescribeSSLPoliciesResponse.DescribeSSLPoliciesResult.SslPolicies.member.size()",
                         greaterThanOrEqualTo(7))
                 .body("DescribeSSLPoliciesResponse.DescribeSSLPoliciesResult.SslPolicies.member.Name",
-                        hasItem("ELBSecurityPolicy-2016-08"));
+                        hasItem("ELBSecurityPolicy-2016-08"))
+                .body(not(containsString("NextMarker")));
     }
 
     @Test
@@ -618,7 +1034,11 @@ class ElbV2IntegrationTest {
             .when()
                 .post("/")
             .then()
-                .statusCode(200);
+                .statusCode(200)
+                .contentType("application/xml")
+                .body(containsString("<DeleteListenerResponse xmlns=\"" + ELB_V2_XMLNS + "\">"))
+                .body(containsString("<DeleteListenerResult></DeleteListenerResult>"))
+                .body("DeleteListenerResponse.ResponseMetadata.RequestId", not(emptyOrNullString()));
 
         given()
                 .formParam("Action", "DescribeListeners")
@@ -629,10 +1049,39 @@ class ElbV2IntegrationTest {
             .then()
                 .statusCode(200)
                 .body("DescribeListenersResponse.DescribeListenersResult.Listeners.member.size()", equalTo(0));
+
+        given()
+                .formParam("Action", "DeleteTargetGroup")
+                .formParam("TargetGroupArn", tgArn)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .contentType("application/xml")
+                .body(containsString("<DeleteTargetGroupResponse xmlns=\"" + ELB_V2_XMLNS + "\">"))
+                .body(containsString("<DeleteTargetGroupResult></DeleteTargetGroupResult>"))
+                .body("DeleteTargetGroupResponse.ResponseMetadata.RequestId", not(emptyOrNullString()));
+        tgArn = null;
     }
 
     @Test
     @Order(72)
+    void deleteTargetGroupIncludesEmptyResult() {
+        given()
+                .formParam("Action", "DeleteTargetGroup")
+                .formParam("TargetGroupArn", tgArn)
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body(containsString("<DeleteTargetGroupResult"))
+                .body("DeleteTargetGroupResponse.ResponseMetadata.RequestId", not(isEmptyOrNullString()));
+    }
+
+    @Test
+    @Order(73)
     void deleteLoadBalancerCascades() {
         given()
                 .formParam("Action", "DeleteLoadBalancer")
@@ -641,7 +1090,11 @@ class ElbV2IntegrationTest {
             .when()
                 .post("/")
             .then()
-                .statusCode(200);
+                .statusCode(200)
+                .contentType("application/xml")
+                .body(containsString("<DeleteLoadBalancerResponse xmlns=\"" + ELB_V2_XMLNS + "\">"))
+                .body(containsString("<DeleteLoadBalancerResult></DeleteLoadBalancerResult>"))
+                .body("DeleteLoadBalancerResponse.ResponseMetadata.RequestId", not(emptyOrNullString()));
 
         given()
                 .formParam("Action", "DescribeLoadBalancers")
@@ -652,5 +1105,48 @@ class ElbV2IntegrationTest {
             .then()
                 .statusCode(400)
                 .body("ErrorResponse.Error.Code", equalTo("LoadBalancerNotFound"));
+    }
+
+    @Test
+    @Order(74)
+    void createLoadBalancerWithMissingSubnetReturnsSubnetNotFound() {
+        given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "lb-missing-subnet")
+                .formParam("Type", "application")
+                .formParam("Subnets.member.1", "subnet-does-not-exist")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("SubnetNotFound"));
+    }
+
+    @Test
+    @Order(75)
+    void setSubnetsWithMissingSubnetReturnsSubnetNotFound() {
+        String setSubnetsLbArn = given()
+                .formParam("Action", "CreateLoadBalancer")
+                .formParam("Name", "lb-set-subnets")
+                .formParam("Type", "application")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract()
+                .path("CreateLoadBalancerResponse.CreateLoadBalancerResult.LoadBalancers.member.LoadBalancerArn");
+
+        given()
+                .formParam("Action", "SetSubnets")
+                .formParam("LoadBalancerArn", setSubnetsLbArn)
+                .formParam("Subnets.member.1", "subnet-does-not-exist")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("SubnetNotFound"));
     }
 }

@@ -36,6 +36,11 @@ public class RuntimeApiServer {
     private static final byte[] CONTAINER_STOPPED_PAYLOAD =
             "{\"errorMessage\":\"Container stopped\",\"errorType\":\"ContainerStopped\"}".getBytes();
 
+    // Acknowledgement body for the /response, /error and /init/error endpoints. Some
+    // runtime clients (e.g. .NET's Amazon.Lambda.RuntimeSupport) deserialize it and
+    // fail on an empty body.
+    private static final String STATUS_OK_BODY = "{\"status\":\"OK\"}";
+
     private final Vertx vertx;
     private final int port;
 
@@ -110,7 +115,7 @@ public class RuntimeApiServer {
                 InvokeResult result = new InvokeResult(200, null, payload, null, requestId);
                 invocation.getResultFuture().complete(result);
             }
-            ctx.response().setStatusCode(202).end();
+            sendStatusOk(ctx);
         });
 
         // POST /runtime/invocation/{requestId}/error — failure
@@ -124,28 +129,39 @@ public class RuntimeApiServer {
                 InvokeResult result = new InvokeResult(200, functionError, payload, null, requestId);
                 invocation.getResultFuture().complete(result);
             }
-            ctx.response().setStatusCode(202).end();
+            sendStatusOk(ctx);
         });
 
         // POST /runtime/init/error — runtime initialization failure
         router.post(INIT_ERROR_PATH).handler(ctx -> {
-            LOG.warnv("Lambda runtime reported init error on port {0}", port);
-            ctx.response().setStatusCode(202).end();
+            LOG.warnv("Lambda runtime reported init error on port {0}", String.valueOf(port));
+            sendStatusOk(ctx);
         });
 
+        long deadline = System.currentTimeMillis() + 5000;
+        tryListen(started, router, deadline);
+
+        return started;
+    }
+
+    private void tryListen(CompletableFuture<Void> started, Router router, long deadline) {
+        if (started.isDone()) return;
         httpServer = vertx.createHttpServer(new HttpServerOptions()
                 .setMaxFormAttributeSize(-1));
         httpServer.requestHandler(router).listen(port, "0.0.0.0", result -> {
             if (result.succeeded()) {
-                LOG.infov("RuntimeApiServer started on port {0}", port);
+                LOG.infov("RuntimeApiServer started on port {0}", String.valueOf(port));
                 started.complete(null);
             } else {
-                LOG.errorv(result.cause(), "RuntimeApiServer failed to bind on port {0}", port);
-                started.completeExceptionally(result.cause());
+                if (System.currentTimeMillis() < deadline) {
+                    LOG.debugv("RuntimeApiServer failed to bind on port {0}, retrying in 100ms...", String.valueOf(port));
+                    httpServer.close(ar -> vertx.setTimer(100, id -> tryListen(started, router, deadline)));
+                } else {
+                    LOG.errorv(result.cause(), "RuntimeApiServer failed to bind on port {0}", String.valueOf(port));
+                    started.completeExceptionally(result.cause());
+                }
             }
         });
-
-        return started;
     }
 
     public synchronized CompletableFuture<Void> stop() {
@@ -158,10 +174,10 @@ public class RuntimeApiServer {
         if (httpServer != null) {
             httpServer.close(ar -> {
                 if (ar.succeeded()) {
-                    LOG.debugv("RuntimeApiServer on port {0} closed", port);
+                    LOG.debugv("RuntimeApiServer on port {0} closed", String.valueOf(port));
                     closed.complete(null);
                 } else {
-                    LOG.warnv(ar.cause(), "RuntimeApiServer on port {0} failed to close cleanly", port);
+                    LOG.warnv(ar.cause(), "RuntimeApiServer on port {0} failed to close cleanly", String.valueOf(port));
                     closed.completeExceptionally(ar.cause());
                 }
             });
@@ -224,6 +240,13 @@ public class RuntimeApiServer {
                     new InvokeResult(200, "Unhandled", CONTAINER_STOPPED_PAYLOAD, null, invocation.getRequestId()));
         }
         return invocation.getResultFuture();
+    }
+
+    private void sendStatusOk(RoutingContext ctx) {
+        ctx.response()
+                .setStatusCode(202)
+                .putHeader("Content-Type", "application/json")
+                .end(STATUS_OK_BODY);
     }
 
     private void sendInvocation(RoutingContext ctx, PendingInvocation invocation) {

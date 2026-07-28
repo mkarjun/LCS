@@ -71,6 +71,14 @@ public class IamActionRegistry {
         // ── DynamoDB (JSON 1.1, action from X-Amz-Target handled separately) ──
         // Handled via Query-style action extraction in the filter
 
+        // ── RDS Data API ───────────────────────────────────────────────────────
+        rule("rds-data", "POST", "^/Execute/?$",              "rds-data:ExecuteStatement"),
+        rule("rds-data", "POST", "^/ExecuteSql/?$",           "rds-data:ExecuteSql"),
+        rule("rds-data", "POST", "^/BatchExecute/?$",         "rds-data:BatchExecuteStatement"),
+        rule("rds-data", "POST", "^/BeginTransaction/?$",     "rds-data:BeginTransaction"),
+        rule("rds-data", "POST", "^/CommitTransaction/?$",    "rds-data:CommitTransaction"),
+        rule("rds-data", "POST", "^/RollbackTransaction/?$",  "rds-data:RollbackTransaction"),
+
         // ── API Gateway ────────────────────────────────────────────────────────
         rule("apigateway", "GET",    ".*/account$",                       "apigateway:GET"),
         rule("apigateway", "PATCH",  ".*/account$",                       "apigateway:PATCH"),
@@ -128,6 +136,18 @@ public class IamActionRegistry {
         String path   = ctx.getUriInfo().getPath();
         if (!path.startsWith("/")) path = "/" + path;
 
+        // S3 sub-resource override: the URL path alone doesn't distinguish
+        // s3:GetObjectAcl / s3:PutObjectAcl from s3:GetObject / s3:PutObject
+        // — only the {@code ?acl} query parameter does. Without this hook,
+        // an actor with s3:GetObject permission could read ACLs that their
+        // policy intends to forbid.
+        if ("s3".equals(credentialScope)) {
+            String s3SubAction = resolveS3SubResourceAction(method, ctx);
+            if (s3SubAction != null) {
+                return s3SubAction;
+            }
+        }
+
         for (ActionRule rule : RULES) {
             if (rule.service().equals(credentialScope)
                     && rule.method().equals(method)
@@ -138,6 +158,57 @@ public class IamActionRegistry {
 
         LOG.debugv("No action mapping for {0} {1} {2} — defaulting to ALLOW", credentialScope, method, path);
         return null;
+    }
+
+    /**
+     * Resolves S3 sub-resource ops (ACL, tagging, retention, etc.) that
+     * cannot be distinguished from the parent op by HTTP method + path alone.
+     * Returns null when no sub-resource is present so the caller falls back
+     * to the standard rule table.
+     */
+    private static String resolveS3SubResourceAction(String method, ContainerRequestContext ctx) {
+        var params = ctx.getUriInfo().getQueryParameters();
+        boolean acl = params.containsKey("acl");
+        boolean tagging = params.containsKey("tagging");
+        if (!acl && !tagging) {
+            return null;
+        }
+        // /{bucket}?acl → bucket-level; /{bucket}/{key}?acl → object-level
+        String path = ctx.getUriInfo().getPath();
+        // Strip leading slash, then check whether there is a key segment after the bucket.
+        // A trailing slash is a valid key character, so /bucket/folder/?acl is an object
+        // request — we cannot use endsWith("/") to infer bucket-level.
+        String stripped = path.startsWith("/") ? path.substring(1) : path;
+        int firstSlash = stripped.indexOf('/');
+        boolean isBucketLevel = firstSlash < 0 || firstSlash == stripped.length() - 1;
+        if (acl) {
+            if (isBucketLevel) {
+                return switch (method) {
+                    case "GET" -> "s3:GetBucketAcl";
+                    case "PUT" -> "s3:PutBucketAcl";
+                    default -> null;
+                };
+            }
+            return switch (method) {
+                case "GET" -> "s3:GetObjectAcl";
+                case "PUT" -> "s3:PutObjectAcl";
+                default -> null;
+            };
+        }
+        if (isBucketLevel) {
+            return switch (method) {
+                case "GET" -> "s3:GetBucketTagging";
+                case "PUT" -> "s3:PutBucketTagging";
+                case "DELETE" -> "s3:DeleteBucketTagging";
+                default -> null;
+            };
+        }
+        return switch (method) {
+            case "GET" -> "s3:GetObjectTagging";
+            case "PUT" -> "s3:PutObjectTagging";
+            case "DELETE" -> "s3:DeleteObjectTagging";
+            default -> null;
+        };
     }
 
     /**

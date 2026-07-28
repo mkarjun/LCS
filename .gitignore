@@ -2,6 +2,7 @@ target/
 data/
 *.class
 *.jar
+!vendor/maven/**/*.jar
 *.war
 .idea/
 *.iml
@@ -28,6 +29,7 @@ package-lock.json
 test-results.xml
 
 *.log
+test-results
 
 
 # Console (React/Cloudscape UI)
@@ -37,3 +39,8 @@ src/main/resources/META-INF/resources/_lcs/ui/
 # The console lock file is committed for reproducible `npm ci` builds,
 # overriding the blanket package-lock.json rule above.
 !console/package-lock.json
+scripts/node_modules/
+
+# Python tooling caches
+__pycache__/
+*.pyc

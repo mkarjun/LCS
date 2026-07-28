@@ -4,6 +4,8 @@ quarkus:
     test-port: 0
     limits:
       max-body-size: ${floci.max-request-size}M
+  datasource:
+    active: false
 
 floci:
   base-url: "http://localhost:4566"
@@ -34,11 +36,38 @@ floci:
         flush-interval-ms: 60000
       opensearch:
         flush-interval-ms: 60000
+      batch:
+        flush-interval-ms: 60000
+      lightsail:
+        flush-interval-ms: 60000
+      codepipeline:
+        flush-interval-ms: 60000
+      s3vectors:
+        flush-interval-ms: 60000
+      ecs:
+        flush-interval-ms: 60000
+      codebuild:
+        flush-interval-ms: 60000
+      config:
+        flush-interval-ms: 60000
+      transcribe:
+        flush-interval-ms: 60000
+      codedeploy:
+        flush-interval-ms: 60000
+      tagging:
+        flush-interval-ms: 60000
+      elasticbeanstalk:
+        flush-interval-ms: 60000
       cloudfront:
+      appsync:
+        flush-interval-ms: 60000
 
   auth:
     validate-signatures: false
     presign-secret: test-secret
+
+  security:
+    disable-cors-headers: false
 
   init-hooks:
     shell-executable: /bin/sh
@@ -49,9 +78,14 @@ floci:
     enabled: false
     self-signed: true
 
+  protocols:
+    strict-claiming: false
+    reject-unknown-service-scope: true
+
   docker:
     log-max-size: "10m"
     log-max-file: "3"
+    resource-namespace: ""
 
   services:
     ssm:
@@ -60,9 +94,10 @@ floci:
     sqs:
       enabled: true
       default-visibility-timeout: 30
-      max-message-size: 262144
+      max-message-size: 1048576
     s3:
       enabled: true
+      enforce-auth: false
       default-presign-expiry-seconds: 3600
     dynamodb:
       enabled: true
@@ -80,29 +115,49 @@ floci:
     iam:
       enabled: true
       enforcement-enabled: false
+      seed-deployer-principal: false
     msk:
       enabled: true
       mock: true
       default-image: "redpandadata/redpanda:latest"
+    amazonmq:
+      enabled: true
+      mock: true
     elasticache:
       enabled: true
       proxy-base-port: 6379
       proxy-max-port: 6399
       default-image: "valkey/valkey:8"
       default-memcached-image: "memcached:1.6"
+    memorydb:
+      enabled: true
+      mock: false
+      proxy-base-port: 6400
+      proxy-max-port: 6419
+      default-image: "valkey/valkey:8"
     rds:
       enabled: true
+      mock: false
       proxy-base-port: 7001
       proxy-max-port: 7099
       default-postgres-image: "postgres:16-alpine"
       default-mysql-image: "mysql:8.0"
       default-mariadb-image: "mariadb:11"
+    rds-data:
+      enabled: true
+      transaction-ttl-seconds: 180
     neptune:
       enabled: true
       proxy-base-port: 8182
       proxy-max-port: 8282
       default-image: "tinkerpop/gremlin-server:3.7.3"
     eventbridge:
+      enabled: true
+    cloudmap:
+      enabled: true
+    emr:
+      enabled: true
+    wafv2:
       enabled: true
     scheduler:
       enabled: true
@@ -124,6 +179,7 @@ floci:
       enabled: true
     stepfunctions:
       enabled: true
+      allow-plaintext-http: true
     cloudformation:
       enabled: true
     acm:
@@ -146,6 +202,11 @@ floci:
       imds-port: 9169
       ssh-port-range-start: 2200
       ssh-port-range-end: 2299
+      publish-security-group-ports: true
+      app-port-range-start: 30000
+      app-port-range-end: 30999
+      max-published-ports-per-instance: 20
+      socat-image: alpine/socat
       mock: true
     ecs:
       enabled: true
@@ -156,11 +217,14 @@ floci:
       enabled: true
     ecr:
       enabled: true
+    ui:
+      enabled: true
     bedrock-runtime:
       enabled: true
     eks:
       enabled: true
       mock: true
+      ecr-registry-mirror: true
     pipes:
       enabled: true
     elbv2:
@@ -169,9 +233,16 @@ floci:
     codebuild:
       enabled: true
       # docker-network: floci-network
+    batch:
+      enabled: true
+      runner-mode: immediate
     codedeploy:
       enabled: true
+    codepipeline:
+      enabled: true
     autoscaling:
+      enabled: true
+    elasticbeanstalk:
       enabled: true
     transfer:
       enabled: true
@@ -192,5 +263,25 @@ floci:
     bcm-data-exports:
       enabled: true
       emit-mode: off
+    cloudtrail:
+      enabled: true
+    lightsail:
+    cloudcontrol:
+      enabled: true
     cloudfront:
+      enabled: true
+    appsync:
+      enabled: true
+      schema-worker-threads: 4
+      schema-worker-shutdown-timeout-seconds: 30
+    s3vectors:
+      enabled: true
+    iot:
+      enabled: true
+      mqtt:
+        enabled: true
+        auto-start: false
+        host: 127.0.0.1
+        port: 1883
+    iotdata:
       enabled: true

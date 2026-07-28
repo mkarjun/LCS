@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.Resettable;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -26,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 @ApplicationScoped
-public class SqsService {
+public class SqsService implements Resettable {
 
     private static final Logger LOG = Logger.getLogger(SqsService.class);
     private static final int DEDUP_WINDOW_SECONDS = 300; // 5 minutes
@@ -128,6 +129,17 @@ public class SqsService {
         loadPersistedDedup();
     }
 
+    public void clear() {
+        messagesByQueue.values().forEach(GuardedMessageQueue::close);
+        messagesByQueue.clear();
+        queueLocks.clear();
+        redrivePolicyCache.clear();
+        deduplicationCache.clear();
+        moveTaskCancellation.values().forEach(flag -> flag.set(true));
+        moveTaskCancellation.clear();
+        moveTasksByHandle.clear();
+    }
+
     private void loadPersistedMessages() {
         if (messageStore == null) {
             return;
@@ -187,10 +199,6 @@ public class SqsService {
         } else {
             dedupStore.delete(storageKey);
         }
-    }
-
-    public Queue createQueue(String queueName, Map<String, String> attributes) {
-        return createQueue(queueName, attributes, null, regionResolver.getDefaultRegion());
     }
 
     public Queue createQueue(String queueName, Map<String, String> attributes, String region) {
@@ -263,10 +271,6 @@ public class SqsService {
         return queue;
     }
 
-    public void deleteQueue(String queueUrl) {
-        deleteQueue(queueUrl, regionResolver.getDefaultRegion());
-    }
-
     public void deleteQueue(String queueUrl, String region) {
         String storageKey = regionKey(region, queueUrl);
         if (queueStore.get(storageKey).isEmpty()) {
@@ -285,11 +289,12 @@ public class SqsService {
         if (dedupStore != null) {
             dedupStore.delete(storageKey);
         }
+        // Wake parked ReceiveMessage long polls so they observe the deletion
+        // and finish, instead of staying registered against this queue URL.
+        // Left alone they would survive a delete + recreate under the same URL
+        // and consume deliveries that belong to the new queue's consumers.
+        notifyReceivers(storageKey);
         LOG.infov("Deleted queue: {0}", queueUrl);
-    }
-
-    public List<Queue> listQueues(String namePrefix) {
-        return listQueues(namePrefix, regionResolver.getDefaultRegion());
     }
 
     public List<Queue> listQueues(String namePrefix, String region) {
@@ -307,10 +312,6 @@ public class SqsService {
         });
     }
 
-    public String getQueueUrl(String queueName) {
-        return getQueueUrl(queueName, regionResolver.getDefaultRegion());
-    }
-
     public String getQueueUrl(String queueName, String region) {
         String accountId = regionResolver.getAccountId();
         String queueUrl = baseUrl + "/" + accountId + "/" + queueName;
@@ -320,10 +321,6 @@ public class SqsService {
                     "The specified queue does not exist for this wsdl version.", 400);
         }
         return queueUrl;
-    }
-
-    public Map<String, String> getQueueAttributes(String queueUrl, List<String> attributeNames) {
-        return getQueueAttributes(queueUrl, attributeNames, regionResolver.getDefaultRegion());
     }
 
     public Map<String, String> getQueueAttributes(String queueUrl, List<String> attributeNames, String region) {
@@ -341,6 +338,7 @@ public class SqsService {
         var counts = getOrCreateQueue(storageKey).messageCounts();
         attrs.put("ApproximateNumberOfMessages", String.valueOf(counts.visible()));
         attrs.put("ApproximateNumberOfMessagesNotVisible", String.valueOf(counts.inFlight()));
+        attrs.put("ApproximateNumberOfMessagesDelayed", String.valueOf(counts.delayed()));
 
         if (attributeNames == null || attributeNames.contains("All")) {
             return attrs;
@@ -354,27 +352,17 @@ public class SqsService {
         return filtered;
     }
 
-    public Message sendMessage(String queueUrl, String body, int delaySeconds) {
-        return sendMessage(queueUrl, body, delaySeconds, null, null);
-    }
-
-    public Message sendMessage(String queueUrl, String body, int delaySeconds, String region) {
+    public Message sendMessage(String queueUrl, String body, Integer delaySeconds, String region) {
         return sendMessage(queueUrl, body, delaySeconds, null, null, region);
     }
 
-    public Message sendMessage(String queueUrl, String body, int delaySeconds,
-                               String messageGroupId, String messageDeduplicationId) {
-        return sendMessage(queueUrl, body, delaySeconds, messageGroupId, messageDeduplicationId, null,
-                regionResolver.getDefaultRegion());
-    }
-
-    public Message sendMessage(String queueUrl, String body, int delaySeconds,
+    public Message sendMessage(String queueUrl, String body, Integer delaySeconds,
                                String messageGroupId, String messageDeduplicationId,
                                String region) {
         return sendMessage(queueUrl, body, delaySeconds, messageGroupId, messageDeduplicationId, null, region);
     }
 
-    public Message sendMessage(String queueUrl, String body, int delaySeconds,
+    public Message sendMessage(String queueUrl, String body, Integer delaySeconds,
                                String messageGroupId, String messageDeduplicationId,
                                Map<String, MessageAttributeValue> messageAttributes,
                                String region) {
@@ -382,7 +370,7 @@ public class SqsService {
                 messageAttributes, null, region);
     }
 
-    public Message sendMessage(String queueUrl, String body, int delaySeconds,
+    public Message sendMessage(String queueUrl, String body, Integer delaySeconds,
                                String messageGroupId, String messageDeduplicationId,
                                Map<String, MessageAttributeValue> messageAttributes,
                                String awsTraceHeader,
@@ -405,15 +393,16 @@ public class SqsService {
         // Resolve the effective delay:
         //   - FIFO queues only support queue-level DelaySeconds per AWS SQS,
         //     so any per-message value is ignored and we always use the
-        //     queue attribute. Without this, FIFO silently dropped the
-        //     queue-level default (issue #475).
-        //   - Standard queues honor per-message DelaySeconds when provided
-        //     (> 0). Applying the queue-level default on the standard path
-        //     requires distinguishing "omitted" from "explicit 0" in the
-        //     handlers, which the current int-parameter API cannot express;
-        //     that's left as follow-up work -- this patch only addresses
-        //     the FIFO regression called out in the issue.
-        int effectiveDelaySeconds = queue.isFifo() ? queueDelaySeconds : delaySeconds;
+        //     queue attribute.
+        //   - Standard queues honor per-message DelaySeconds when explicitly
+        //     provided (non-null). When omitted (null), the queue-level
+        //     default applies.
+        int effectiveDelaySeconds;
+        if (queue.isFifo()) {
+            effectiveDelaySeconds = queueDelaySeconds;
+        } else {
+            effectiveDelaySeconds = (delaySeconds != null) ? delaySeconds : queueDelaySeconds;
+        }
 
         // FIFO queue validation
         if (queue.isFifo()) {
@@ -607,11 +596,6 @@ public class SqsService {
         }
     }
 
-    public List<Message> receiveMessage(String queueUrl, int maxMessages, int visibilityTimeout, int waitTimeSeconds) {
-        return receiveMessage(queueUrl, maxMessages, visibilityTimeout, waitTimeSeconds,
-                regionResolver.getDefaultRegion());
-    }
-
     public List<Message> receiveMessage(String queueUrl, int maxMessages, int visibilityTimeout,
                                         int waitTimeSeconds, String region) {
         String storageKey = regionKey(region, queueUrl);
@@ -626,9 +610,21 @@ public class SqsService {
         long start = System.currentTimeMillis();
         long maxWait = waitTimeSeconds * 1000L;
         Object lock = queueLocks.computeIfAbsent(storageKey, k -> new Object());
+        // The queue incarnation this call polls against. DeleteQueue removes it
+        // from messagesByQueue (and CreateQueue registers a fresh instance), so
+        // an identity change tells a parked long poll that its queue is gone.
+        GuardedMessageQueue polledQueue = getOrCreateQueue(storageKey);
 
         while (true) {
-            List<Message> result = doReceiveMessage(storageKey, maxMessages, visibilityTimeout, region);
+            if (messagesByQueue.get(storageKey) != polledQueue) {
+                // The queue was deleted mid-poll (and possibly recreated under
+                // the same URL). Finish empty-handed: a receive opened against
+                // the deleted incarnation must not consume deliveries — nor
+                // burn ApproximateReceiveCount / redrive budget — that belong
+                // to the new queue's consumers.
+                return Collections.emptyList();
+            }
+            List<Message> result = doReceiveMessage(storageKey, queueUrl, maxMessages, visibilityTimeout, region);
             if (!result.isEmpty() || maxWait <= 0) {
                 if (!result.isEmpty() && LOG.isTraceEnabled()) {
                     for (Message m : result) {
@@ -674,8 +670,8 @@ public class SqsService {
         });
     }
 
-    private List<Message> doReceiveMessage(String storageKey, int maxMessages, int visibilityTimeout, String region) {
-        Queue queue = queueStore.get(storageKey).orElse(null);
+    private List<Message> doReceiveMessage(String storageKey, String queueUrl, int maxMessages, int visibilityTimeout, String region) {
+        Queue queue = getQueueByUrl(storageKey, queueUrl).orElse(null);
         if (queue == null) {
             return Collections.emptyList();
         }
@@ -729,18 +725,10 @@ public class SqsService {
         }
     }
 
-    public List<Message> peekMessages(String queueUrl) {
-        return peekMessages(queueUrl, regionResolver.getDefaultRegion());
-    }
-
     public List<Message> peekMessages(String queueUrl, String region) {
         String storageKey = regionKey(region, queueUrl);
         ensureQueueExists(storageKey);
         return getOrCreateQueue(storageKey).peekAll();
-    }
-
-    public void deleteMessage(String queueUrl, String receiptHandle) {
-        deleteMessage(queueUrl, receiptHandle, regionResolver.getDefaultRegion());
     }
 
     public void deleteMessage(String queueUrl, String receiptHandle, String region) {
@@ -764,10 +752,6 @@ public class SqsService {
         }
     }
 
-    public void changeMessageVisibility(String queueUrl, String receiptHandle, int visibilityTimeout) {
-        changeMessageVisibility(queueUrl, receiptHandle, visibilityTimeout, regionResolver.getDefaultRegion());
-    }
-
     public void changeMessageVisibility(String queueUrl, String receiptHandle, int visibilityTimeout, String region) {
         String storageKey = regionKey(region, queueUrl);
         ensureQueueExists(storageKey);
@@ -777,10 +761,6 @@ public class SqsService {
             throw new AwsException("ReceiptHandleIsInvalid",
                     "The input receipt handle is not a valid receipt handle.", 400);
         }
-    }
-
-    public void purgeQueue(String queueUrl) {
-        purgeQueue(queueUrl, regionResolver.getDefaultRegion());
     }
 
     public void purgeQueue(String queueUrl, String region) {
@@ -890,8 +870,8 @@ public class SqsService {
         }
 
         var srcQueueInitial = getOrCreateQueue(srcKey);
-        long toMove = srcQueueInitial.messageCounts().visible()
-                + srcQueueInitial.messageCounts().inFlight();
+        var srcCounts = srcQueueInitial.messageCounts();
+        long toMove = srcCounts.visible() + srcCounts.inFlight() + srcCounts.delayed();
 
         String taskHandle = "task-" + UUID.randomUUID();
         moveTasksByHandle.put(taskHandle, new MoveTask(
@@ -1153,7 +1133,7 @@ public class SqsService {
         ObjectNode principal = statement.putObject("Principal");
         ArrayNode awsArns = principal.putArray("AWS");
         for (String accountId : awsAccountIds) {
-            awsArns.add("arn:aws:iam::" + accountId + ":root");
+            awsArns.add(AwsArnUtils.Arn.of("iam", "", accountId, "root").toString());
         }
         ArrayNode actions = statement.putArray("Action");
         for (String action : actionNames) {

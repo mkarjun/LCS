@@ -2,11 +2,7 @@ package io.github.hectorvent.floci.services.athena;
 
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.*;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
@@ -58,7 +54,10 @@ class AthenaIntegrationTest {
         .then()
             .statusCode(200)
             .body("QueryExecution.QueryExecutionId", equalTo(queryExecutionId))
-            .body("QueryExecution.Status.State", equalTo("SUCCEEDED"));
+            .body("QueryExecution.Status.State", equalTo("SUCCEEDED"))
+            .body("QueryExecution.StatementType", equalTo("DML"))
+            .body("QueryExecution.EngineVersion.EffectiveEngineVersion", equalTo("Athena engine version 3"))
+            .body("QueryExecution.Statistics.DataScannedInBytes", equalTo(0));
     }
 
     @Test
@@ -102,5 +101,280 @@ class AthenaIntegrationTest {
         .then()
             .statusCode(400)
             .body("__type", equalTo("InvalidRequestException"));
+    }
+
+    @Test
+    @Order(6)
+    void supportsWorkGroupAndCatalogMetadataActions() {
+        given()
+            .header("X-Amz-Target", "AmazonAthena.GetWorkGroup")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"WorkGroup\": \"primary\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("WorkGroup.Name", equalTo("primary"))
+            .body("WorkGroup.Configuration.EngineVersion.EffectiveEngineVersion", equalTo("Athena engine version 3"));
+
+        given()
+            .header("X-Amz-Target", "AmazonAthena.ListDataCatalogs")
+            .contentType(CONTENT_TYPE)
+            .body("{}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DataCatalogsSummary[0].CatalogName", equalTo("AwsDataCatalog"))
+            .body("DataCatalogsSummary[0].Type", equalTo("GLUE"));
+    }
+
+    @Test
+    @Order(7)
+    void listsGlueDatabasesAndTablesAsAthenaMetadata() {
+        given()
+            .header("X-Amz-Target", "AWSGlue.CreateDatabase")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"DatabaseInput\": { \"Name\": \"analytics_test\" } }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "AWSGlue.CreateTable")
+            .contentType(CONTENT_TYPE)
+            .body("""
+                {
+                  "DatabaseName": "analytics_test",
+                  "TableInput": {
+                    "Name": "orders",
+                    "TableType": "EXTERNAL_TABLE",
+                    "StorageDescriptor": {
+                      "Location": "s3://bucket/orders",
+                      "Columns": [
+                        { "Name": "id", "Type": "string" },
+                        { "Name": "payload", "Type": "struct<id:string>" }
+                      ]
+                    }
+                  }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "AmazonAthena.ListDatabases")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"CatalogName\": \"AwsDataCatalog\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DatabaseList.Name", hasItem("analytics_test"));
+
+        given()
+            .header("X-Amz-Target", "AmazonAthena.GetTableMetadata")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"CatalogName\": \"AwsDataCatalog\", \"DatabaseName\": \"analytics_test\", \"TableName\": \"orders\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("TableMetadata.Name", equalTo("orders"))
+            .body("TableMetadata.Columns[0].Name", equalTo("id"))
+            .body("TableMetadata.Columns[0].Type", equalTo("varchar"))
+            .body("TableMetadata.Columns[1].Type", equalTo("varchar"))
+            .body("TableMetadata.PartitionKeys", empty());
+    }
+
+    @Test
+    @Order(8)
+    void listsGlueDatabasesAndTablesAsAthenaMetadataHasPartitionKeys() {
+        given()
+                .header("X-Amz-Target", "AWSGlue.CreateDatabase")
+                .contentType(CONTENT_TYPE)
+                .body("{ \"DatabaseInput\": { \"Name\": \"analytics_test2\" } }")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200);
+
+        given()
+                .header("X-Amz-Target", "AWSGlue.CreateTable")
+                .contentType(CONTENT_TYPE)
+                .body("""
+                {
+                  "DatabaseName": "analytics_test2",
+                  "TableInput": {
+                    "Name": "orders",
+                    "TableType": "EXTERNAL_TABLE",
+                    "StorageDescriptor": {
+                      "Location": "s3://bucket/orders",
+                      "Columns": [
+                        { "Name": "id", "Type": "string" },
+                        { "Name": "payload", "Type": "struct<id:string>" }
+                      ]
+                    },
+                    "PartitionKeys": [
+                      { "Name": "pkey", "Type": "string" }
+                    ]
+                  }
+                }
+                """)
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200);
+
+        given()
+                .header("X-Amz-Target", "AmazonAthena.ListDatabases")
+                .contentType(CONTENT_TYPE)
+                .body("{ \"CatalogName\": \"AwsDataCatalog\" }")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200)
+                .body("DatabaseList.Name", hasItem("analytics_test2"));
+
+        given()
+                .header("X-Amz-Target", "AmazonAthena.GetTableMetadata")
+                .contentType(CONTENT_TYPE)
+                .body("{ \"CatalogName\": \"AwsDataCatalog\", \"DatabaseName\": \"analytics_test2\", \"TableName\": \"orders\" }")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200)
+                .body("TableMetadata.Name", equalTo("orders"))
+                .body("TableMetadata.Columns[0].Name", equalTo("id"))
+                .body("TableMetadata.Columns[0].Type", equalTo("varchar"))
+                .body("TableMetadata.Columns[1].Type", equalTo("varchar"))
+                .body("TableMetadata.PartitionKeys[0].Name", equalTo("pkey"))
+                .body("TableMetadata.PartitionKeys[0].Type", equalTo("varchar"));
+    }
+
+    @Test
+    @Order(9)
+    void deleteWorkGroup() {
+        given()
+            .header("X-Amz-Target", "AmazonAthena.DeleteWorkGroup")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"WorkGroup\": \"athena-workgroup-sample\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(equalTo("{}"));
+    }
+
+    @Test
+    @Order(10)
+    void deleteWorkGroupMissingOrBlank() {
+        given()
+            .header("X-Amz-Target", "AmazonAthena.DeleteWorkGroup")
+            .contentType(CONTENT_TYPE)
+            .body("{}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"))
+            .body("message", equalTo("WorkGroup is required."));
+
+        given()
+            .header("X-Amz-Target", "AmazonAthena.DeleteWorkGroup")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"WorkGroup\": \"  \" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"))
+            .body("message", equalTo("WorkGroup is required."));
+
+        given()
+            .header("X-Amz-Target", "AmazonAthena.DeleteWorkGroup")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"WorkGroup\": \"bad name\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"))
+            .body("message", equalTo("WorkGroup is required."));
+
+        given()
+            .header("X-Amz-Target", "AmazonAthena.DeleteWorkGroup")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"WorkGroup\": \"" + "a".repeat(129) + "\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"))
+            .body("message", equalTo("WorkGroup is required."));
+    }
+
+    @Test
+    @Order(11)
+    void deletePrimaryWorkGroup() {
+        given()
+            .header("X-Amz-Target", "AmazonAthena.DeleteWorkGroup")
+            .contentType(CONTENT_TYPE)
+            .body("{ \"WorkGroup\": \"primary\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"))
+            .body("message", equalTo("The primary workgroup cannot be deleted."));
+    }
+
+    @Test
+    @Order(12)
+    void getTableMetadataTimestampsAreSerializedAsEpochSecondsNumbers() {
+        given()
+                .header("X-Amz-Target", "AWSGlue.CreateDatabase")
+                .contentType(CONTENT_TYPE)
+                .body("{ \"DatabaseInput\": { \"Name\": \"ts-format-test\" } }")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200);
+
+        given()
+                .header("X-Amz-Target", "AWSGlue.CreateTable")
+                .contentType(CONTENT_TYPE)
+                .body("""
+                        {
+                          "DatabaseName": "ts-format-test",
+                          "TableInput": {
+                            "Name": "events",
+                            "TableType": "EXTERNAL_TABLE",
+                            "StorageDescriptor": {
+                              "Location": "s3://bucket/events",
+                              "Columns": [ { "Name": "id", "Type": "string" } ]
+                            }
+                          }
+                        }
+                        """)
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200);
+
+        given()
+                .header("X-Amz-Target", "AmazonAthena.GetTableMetadata")
+                .contentType(CONTENT_TYPE)
+                .body("{ \"CatalogName\": \"AwsDataCatalog\", \"DatabaseName\": \"ts-format-test\", \"TableName\": \"events\" }")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200)
+                .body("TableMetadata.Name", equalTo("events"))
+                .body("TableMetadata.CreateTime", instanceOf(Number.class))
+                .body("TableMetadata.LastAccessTime", instanceOf(Number.class));
     }
 }

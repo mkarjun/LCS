@@ -4,6 +4,7 @@ import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 @ConfigMapping(prefix = "floci")
 public interface EmulatorConfig {
@@ -50,7 +51,7 @@ public interface EmulatorConfig {
     @WithDefault("000000000000")
     String defaultAccountId();
 
-    @WithDefault("512")
+    @WithDefault("2048")
     int maxRequestSize();
 
     @WithDefault("public.ecr.aws")
@@ -62,6 +63,8 @@ public interface EmulatorConfig {
 
     AuthConfig auth();
 
+    SecurityConfig security();
+
     ServicesConfig services();
 
     DockerConfig docker();
@@ -69,6 +72,34 @@ public interface EmulatorConfig {
     InitHooksConfig initHooks();
 
     TlsConfig tls();
+
+    ProtocolsConfig protocols();
+
+    interface ProtocolsConfig {
+        /**
+         * When enabled, requests carrying an RPC protocol signal that no
+         * supported wire protocol claims are rejected per the Smithy
+         * wire-protocol-selection guide (e.g. an unknown Smithy-Protocol header
+         * value, a recognized-but-unimplemented rpc-v2-json request, or an
+         * X-Amz-Target post with a foreign content type). When disabled such
+         * requests are only logged and pass through to JAX-RS matching.
+         */
+        @WithDefault("false")
+        boolean strictClaiming();
+
+        /**
+         * When enabled, a REST request whose SigV4 credential scope names a service
+         * absent from the catalog is rejected with {@code UnknownOperationException}
+         * instead of falling through JAX-RS matching into S3's path-style routes,
+         * where it surfaces as a misleading {@code NoSuchBucket} (issue #1754).
+         *
+         * <p>On by default. Turn it off if Floci serves a route whose signing scope
+         * is not yet enumerated in the catalog: the request then falls through as it
+         * did before, rather than failing with a 404 that has no workaround.
+         */
+        @WithDefault("true")
+        boolean rejectUnknownServiceScope();
+    }
 
     interface DnsConfig {
         /**
@@ -89,6 +120,53 @@ public interface EmulatorConfig {
          * </pre>
          */
         Optional<List<String>> extraSuffixes();
+
+        /**
+         * When {@code true} (default), the configured {@link #containerFallbackServers()} are
+         * appended after Floci's embedded DNS to every spawned container's {@code HostConfig.Dns}.
+         * This gives Lambda/CodeBuild/etc. a real secondary resolver so public hostnames still
+         * resolve if Floci's embedded forwarder cannot answer — mirroring the
+         * {@code docker run --dns <FlociIP> --dns 8.8.8.8} workaround.
+         *
+         * <p>Disable (via {@code FLOCI_DNS_CONTAINER_FALLBACK_ENABLED=false}) in offline or
+         * locked-down networks where the public resolvers are unreachable/blocked.
+         */
+        @WithDefault("true")
+        boolean containerFallbackEnabled();
+
+        /**
+         * Ordered list of public DNS resolvers used both as the fallback upstream for Floci's
+         * embedded DNS forwarder and (when {@link #containerFallbackEnabled()}) as the secondary
+         * resolvers injected into spawned containers.
+         *
+         * <p>Via environment variable (comma-separated):
+         * <pre>
+         * FLOCI_DNS_CONTAINER_FALLBACK_SERVERS=1.1.1.1,1.0.0.1
+         * </pre>
+         */
+        @WithDefault("8.8.8.8,8.8.4.4")
+        List<String> containerFallbackServers();
+    }
+
+    interface SecurityConfig {
+        Optional<List<String>> extraCorsAllowedOrigins();
+        Optional<List<String>> extraCorsAllowedHeaders();
+        Optional<List<String>> extraCorsExposeHeaders();
+
+        @WithDefault("false")
+        boolean disableCorsHeaders();
+
+        /**
+         * Whether to grant Private Network Access preflights (respond with
+         * {@code Access-Control-Allow-Private-Network: true}) when the browser asks.
+         * Only takes effect after the origin already passes the CORS allow-list, so a
+         * page served from a public/secure origin can reach this loopback backend.
+         *
+         * <p>Off by default: it lets a public origin reach the private network, so it
+         * must be opted into explicitly.</p>
+         */
+        @WithDefault("false")
+        boolean corsAllowPrivateNetwork();
     }
 
     interface StorageConfig {
@@ -113,6 +191,59 @@ public interface EmulatorConfig {
         WalConfig wal();
 
         ServiceStorageOverrides services();
+
+        EfsSharingConfig efs();
+    }
+
+    /**
+     * Emulates an Amazon EFS access point's POSIX ownership for the shared local Docker volumes
+     * that stand in for EFS file systems. A Docker named volume is created {@code root:root 0755},
+     * so a container whose image runs as a non-root {@code USER} (as ECS tasks and
+     * access-point-mounted workloads typically do) then cannot create files on it. Real EFS
+     * applies the access point's {@code PosixUser} to all I/O and initialises the root directory
+     * per {@code RootDirectory.CreationInfo}. These settings reproduce that: Floci initialises the
+     * shared volume root's owner/permissions once and can run the mounting containers under a
+     * fixed identity, so the emulated file system is writable by the intended uid/gid.
+     *
+     * <p>Every value is empty/false by default, so a shared volume behaves exactly as before —
+     * a plain named volume with no ownership change — unless explicitly configured.
+     */
+    interface EfsSharingConfig {
+        /** Owner uid applied to the volume root (EFS {@code RootDirectory.CreationInfo.OwnerUid}). */
+        OptionalInt ownerUid();
+
+        /** Owner gid applied to the volume root (EFS {@code RootDirectory.CreationInfo.OwnerGid}). */
+        OptionalInt ownerGid();
+
+        /**
+         * Octal permissions applied to the volume root (EFS {@code RootDirectory.CreationInfo.Permissions}),
+         * e.g. {@code "0777"}. A 4-digit value carries the special bits exactly as AWS does — e.g.
+         * {@code "2775"} sets the setgid bit so subdirectories inherit the owner gid (the standard
+         * POSIX pattern for a group-shared tree). When empty, no {@code chmod} for the permission
+         * bits is performed; however the init helper container still runs if {@link #ownerUid()} or
+         * {@link #ownerGid()} is set. Volume-root initialisation is skipped entirely only when all of
+         * {@code owner-uid}, {@code owner-gid}, and {@code root-permissions} are left at their
+         * defaults (plain named volume).
+         */
+        Optional<String> rootPermissions();
+
+        /** Lightweight image used for the one-off {@code chown}/{@code chmod} of the volume root. */
+        @WithDefault("busybox:stable")
+        String initImage();
+
+        /**
+         * Run containers that mount a shared volume as this {@code "uid[:gid]"}, emulating the
+         * access point's {@code PosixUser} that squashes all file-system I/O to a fixed identity.
+         * Empty leaves the container's image {@code USER} in effect.
+         */
+        Optional<String> mountUser();
+
+        /**
+         * Supplementary group id added to containers that mount a shared volume, so a process
+         * running under a different primary uid can still write a group-shared tree owned by
+         * {@link #ownerGid()}. Empty adds no supplementary group.
+         */
+        OptionalInt mountGroupAdd();
     }
 
     interface ServiceStorageOverrides {
@@ -130,10 +261,25 @@ public interface EmulatorConfig {
         AppConfigStorageConfig appconfig();
         AppConfigDataStorageConfig appconfigdata();
         ElastiCacheStorageConfig elasticache();
+        MemoryDbStorageConfig memorydb();
         RdsStorageConfig rds();
+        Ec2StorageConfig ec2();
         NeptuneStorageConfig neptune();
         BackupStorageConfig backup();
         CloudFrontStorageConfig cloudfront();
+        AppSyncStorageConfig appsync();
+        BatchStorageConfig batch();
+        LightsailStorageConfig lightsail();
+        CodePipelineStorageConfig codepipeline();
+        S3VectorsStorageConfig s3vectors();
+        EcsStorageConfig ecs();
+        CodeBuildStorageConfig codebuild();
+        ConfigStorageConfig config();
+        CodeDeployStorageConfig codedeploy();
+        TranscribeStorageConfig transcribe();
+        TaggingStorageConfig tagging();
+        ElasticBeanstalkStorageConfig elasticbeanstalk();
+        CloudTrailStorageConfig cloudtrail();
     }
 
     interface SsmStorageConfig {
@@ -228,7 +374,18 @@ public interface EmulatorConfig {
         long flushIntervalMs();
     }
 
+    interface MemoryDbStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
     interface RdsStorageConfig {
+        Optional<String> mode();
+    }
+
+    interface Ec2StorageConfig {
         Optional<String> mode();
     }
 
@@ -245,6 +402,97 @@ public interface EmulatorConfig {
 
     interface CloudFrontStorageConfig {
         Optional<String> mode();
+    }
+
+    interface AppSyncStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface BatchStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface LightsailStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface CodePipelineStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface S3VectorsStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface EcsStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface CodeBuildStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface ConfigStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface TranscribeStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface TaggingStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface ElasticBeanstalkStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface CloudTrailStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface CodeDeployStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
     }
 
     interface WalConfig {
@@ -274,9 +522,15 @@ public interface EmulatorConfig {
         ApiGatewayServiceConfig apigateway();
         IamServiceConfig iam();
         MskServiceConfig msk();
+        AmazonMqServiceConfig amazonmq();
         ElastiCacheServiceConfig elasticache();
+        MemoryDbServiceConfig memorydb();
         RdsServiceConfig rds();
+        RdsDataServiceConfig rdsData();
         EventBridgeServiceConfig eventbridge();
+        CloudMapServiceConfig cloudmap();
+        EmrServiceConfig emr();
+        WafV2ServiceConfig wafv2();
         SchedulerServiceConfig scheduler();
         CloudWatchLogsServiceConfig cloudwatchlogs();
         CloudWatchMetricsServiceConfig cloudwatchmetrics();
@@ -305,9 +559,12 @@ public interface EmulatorConfig {
         ElbV2ServiceConfig elbv2();
         CodeBuildServiceConfig codebuild();
         CodeDeployServiceConfig codedeploy();
+        CodePipelineServiceConfig codepipeline();
         AutoScalingServiceConfig autoscaling();
+        ElasticBeanstalkServiceConfig elasticbeanstalk();
         BackupServiceConfig backup();
         NeptuneServiceConfig neptune();
+        DocDbServiceConfig docdb();
         Route53ServiceConfig route53();
         TransferServiceConfig transfer();
         TextractServiceConfig textract();
@@ -318,7 +575,56 @@ public interface EmulatorConfig {
         CurServiceConfig cur();
         BcmDataExportsServiceConfig bcmDataExports();
         ConfigServiceConfig configservice();
+        CloudTrailServiceConfig cloudtrail();
+        CloudControlServiceConfig cloudcontrol();
         CloudFrontServiceConfig cloudfront();
+        AppSyncServiceConfig appsync();
+        BatchServiceConfig batch();
+        LightsailServiceConfig lightsail();
+        UiServiceConfig ui();
+        S3VectorsServiceConfig s3vectors();
+        IotServiceConfig iot();
+        IotDataServiceConfig iotdata();
+    }
+
+    interface IotServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        MqttConfig mqtt();
+    }
+
+    interface MqttConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("false")
+        boolean autoStart();
+
+        @WithDefault("0.0.0.0")
+        String host();
+
+        @WithDefault("1883")
+        int port();
+    }
+
+    interface IotDataServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface LightsailServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface CloudControlServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+    interface S3VectorsServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
     }
 
     interface TransferServiceConfig {
@@ -356,7 +662,23 @@ public interface EmulatorConfig {
         boolean enabled();
     }
 
+    interface CloudTrailServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        /** How often the writer flushes pending records into the destination
+         *  bucket. Real AWS delivers data events with ~5-minute lag; the
+         *  default here is 60s so dev/CI feedback loops stay fast. */
+        @WithDefault("60")
+        int flushIntervalSeconds();
+    }
+
     interface AutoScalingServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface ElasticBeanstalkServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
@@ -368,7 +690,22 @@ public interface EmulatorConfig {
         Optional<String> dockerNetwork();
     }
 
+    interface BatchServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("immediate")
+        String runnerMode();
+
+        Optional<String> dockerNetwork();
+    }
+
     interface CodeDeployServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface CodePipelineServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
@@ -388,7 +725,7 @@ public interface EmulatorConfig {
         @WithDefault("30")
         int defaultVisibilityTimeout();
 
-        @WithDefault("262144")
+        @WithDefault("1048576")
         int maxMessageSize();
 
         @WithDefault("false")
@@ -398,6 +735,9 @@ public interface EmulatorConfig {
     interface S3ServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        @WithDefault("false")
+        boolean enforceAuth();
 
         @WithDefault("3600")
         int defaultPresignExpirySeconds();
@@ -424,6 +764,9 @@ public interface EmulatorConfig {
 
         @WithDefault("false")
         boolean enforcementEnabled();
+
+        @WithDefault("false")
+        boolean seedDeployerPrincipal();
     }
 
     interface MskServiceConfig {
@@ -434,6 +777,23 @@ public interface EmulatorConfig {
         boolean mock();
 
         @WithDefault("redpandadata/redpanda:latest")
+        String defaultImage();
+
+        @WithDefault("9300")
+        int kafkaHostPortBase();
+
+        @WithDefault("9399")
+        int kafkaHostPortMax();
+    }
+
+    interface AmazonMqServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("false")
+        boolean mock();
+
+        @WithDefault("rabbitmq:3-management")
         String defaultImage();
     }
 
@@ -457,9 +817,35 @@ public interface EmulatorConfig {
         Optional<String> dockerNetwork();
     }
 
+    interface MemoryDbServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("false")
+        boolean mock();
+
+        @WithDefault("6400")
+        int proxyBasePort();
+
+        @WithDefault("6419")
+        int proxyMaxPort();
+
+        @WithDefault("valkey/valkey:8")
+        String defaultImage();
+
+        /** Docker network to attach MemoryDB containers to. Empty = default bridge. */
+        Optional<String> dockerNetwork();
+    }
+
     interface RdsServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        /** When true, DB clusters and instances are created instantly without a real Docker
+         *  container or auth proxy (API/metadata only). Useful for CI and environments without
+         *  access to the Docker socket. */
+        @WithDefault("false")
+        boolean mock();
 
         @WithDefault("7000")
         int proxyBasePort();
@@ -480,6 +866,14 @@ public interface EmulatorConfig {
         Optional<String> dockerNetwork();
     }
 
+    interface RdsDataServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("180")
+        long transactionTtlSeconds();
+    }
+
     interface NeptuneServiceConfig {
         @WithDefault("true")
         boolean enabled();
@@ -492,13 +886,66 @@ public interface EmulatorConfig {
         @WithDefault("8282")
         int proxyMaxPort();
 
+        /**
+         * Backend graph engine and query language: {@code gremlin} (Apache TinkerPop, Gremlin
+         * over WebSocket) or {@code neo4j} (Neo4j, openCypher over Bolt). Mirrors LocalStack's
+         * {@code NEPTUNE_DB_TYPE}.
+         */
+        @WithDefault("gremlin")
+        String dbType();
+
+        /** Image used when {@code db-type=gremlin}. */
         @WithDefault("tinkerpop/gremlin-server:3.7.3")
+        String defaultImage();
+
+        /** Image used when {@code db-type=neo4j} (openCypher / Bolt). */
+        @WithDefault("neo4j:5-community")
+        String defaultNeo4jImage();
+
+        Optional<String> dockerNetwork();
+    }
+
+    interface DocDbServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("false")
+        boolean mock();
+
+        @WithDefault("mongo:7.0")
         String defaultImage();
 
         Optional<String> dockerNetwork();
     }
 
     interface EventBridgeServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface CloudMapServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        /** Delay before an async operation (CreateNamespace, RegisterInstance, …)
+         *  transitions from PENDING to SUCCESS. 0 = complete immediately. */
+        @WithDefault("0")
+        int operationCompletionDelaySeconds();
+    }
+
+    interface EmrServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("emr-7.5.0")
+        String defaultReleaseLabel();
+
+        /** Delay before a cluster reaches WAITING; 0 = advance synchronously. */
+        @WithDefault("0")
+        int clusterStartupDelaySeconds();
+    }
+
+    interface WafV2ServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
@@ -529,6 +976,15 @@ public interface EmulatorConfig {
 
         @WithDefault("10000")
         int maxEventsPerQuery();
+
+        /**
+         * Artificial Logs Insights query completion delay, in milliseconds. With the default 0,
+         * queries complete immediately (fast local dev). A positive value emulates the real
+         * asynchronous lifecycle — StartQuery → Running → Complete after this delay — which also
+         * makes StopQuery on a still-running query return {@code success=true}.
+         */
+        @WithDefault("0")
+        long queryCompletionDelayMs();
     }
 
     interface CloudWatchMetricsServiceConfig {
@@ -572,6 +1028,10 @@ public interface EmulatorConfig {
     interface StepFunctionsServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        /** Allows invoking plain HTTP endpoints. By default, AWS only allows HTTPS. */
+        @WithDefault("true")
+        boolean allowPlaintextHttp();
     }
 
     interface CloudFormationServiceConfig {
@@ -759,6 +1219,19 @@ public interface EmulatorConfig {
         String domainSuffix();
     }
 
+    interface AppSyncServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        /** Worker threads for async schema creation. Env: FLOCI_SERVICES_APPSYNC_SCHEMA_WORKER_THREADS */
+        @WithDefault("4")
+        int schemaWorkerThreads();
+
+        /** Seconds to wait for in-flight schema workers on shutdown. Env: FLOCI_SERVICES_APPSYNC_SCHEMA_WORKER_SHUTDOWN_TIMEOUT_SECONDS */
+        @WithDefault("30")
+        int schemaWorkerShutdownTimeoutSeconds();
+    }
+
     interface BcmDataExportsServiceConfig {
         @WithDefault("true")
         boolean enabled();
@@ -769,6 +1242,26 @@ public interface EmulatorConfig {
          */
         @WithDefault("synchronous")
         String emitMode();
+    }
+
+    interface UiServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("floci/floci-ui:latest")
+        String image();
+
+        @WithDefault("floci-ui")
+        String containerName();
+
+        /** Single fixed host port the UI is published on (single-instance service). */
+        @WithDefault("4500")
+        int port();
+
+        @WithDefault("false")
+        boolean keepRunningOnShutdown();
+
+        Optional<String> dockerNetwork();
     }
 
     interface EcrServiceConfig {
@@ -907,6 +1400,34 @@ public interface EmulatorConfig {
         @WithDefault("2299")
         int sshPortRangeEnd();
 
+        /**
+         * When true, TCP ports opened by an instance's security-group ingress rules are
+         * published on the host via a socat sidecar container, both at launch and on later
+         * authorize-security-group-ingress. Set false to keep security groups as metadata only.
+         */
+        @WithDefault("true")
+        boolean publishSecurityGroupPorts();
+
+        /** Lowest host port in the range allocated for published security-group app ports. */
+        @WithDefault("30000")
+        int appPortRangeStart();
+
+        /** Highest host port in the range allocated for published security-group app ports. */
+        @WithDefault("30999")
+        int appPortRangeEnd();
+
+        /**
+         * Upper bound on app ports published per instance. Also bounds any single ingress
+         * rule's port span: wider ranges (e.g. an allow-all 0-65535 rule) are skipped so a
+         * single rule cannot spawn thousands of socat sidecars or exhaust the host-port range.
+         */
+        @WithDefault("20")
+        int maxPublishedPortsPerInstance();
+
+        /** Image used for the socat sidecar that forwards published security-group ports. */
+        @WithDefault("alpine/socat")
+        String socatImage();
+
         /** When true, instances go straight to RUNNING without launching Docker containers. */
         @WithDefault("false")
         boolean mock();
@@ -963,6 +1484,36 @@ public interface EmulatorConfig {
 
         @WithDefault("false")
         boolean keepRunningOnShutdown();
+
+        /**
+         * Controls the endpoint that {@code describe-cluster} returns in real mode:
+         * <ul>
+         *   <li>{@code host} (default) — {@code https://localhost:<hostPort>}, reachable from the
+         *       host so {@code kubectl}/{@code aws eks} work out of the box.</li>
+         *   <li>{@code network} — the container DNS name {@code https://floci-eks-<name>:6443},
+         *       reachable from other containers on the Docker network (pre-#1118 behaviour). Falls
+         *       back to the host endpoint when Floci runs natively.</li>
+         * </ul>
+         */
+        @WithDefault("host")
+        String endpointMode();
+
+        /**
+         * When true, wires a token-authentication webhook into k3s so that the bearer token
+         * produced by {@code aws eks get-token} is validated by Floci and mapped to cluster-admin.
+         * This makes the native {@code aws eks update-kubeconfig} + {@code kubectl} flow work.
+         */
+        @WithDefault("true")
+        boolean iamAuthWebhook();
+
+        /**
+         * When true (and ECR is enabled), each new k3s cluster gets a generated
+         * {@code /etc/rancher/k3s/registries.yaml} that mirrors every ECR repository URI the
+         * emulator can mint to the registry container's in-network endpoint, so pods can pull
+         * images pushed to Floci ECR without any manual containerd configuration.
+         */
+        @WithDefault("true")
+        boolean ecrRegistryMirror();
     }
 
     interface InitHooksConfig {
@@ -1001,6 +1552,23 @@ public interface EmulatorConfig {
          */
         @WithDefault("true")
         boolean selfSigned();
+
+        /**
+         * Additional port the TLS proxy binds for AWS-style HTTPS traffic, alongside the
+         * public Floci {@link EmulatorConfig#port()}.
+         *
+         * <p>CDK/CloudFormation custom resources send their {@code cfn-response} callback with
+         * bundled code that hardcodes {@code https://} and ignores the port in the ResponseURL,
+         * so the PUT lands on the conventional 443 regardless of Floci's configured port. Binding
+         * 443 here (with the same HTTP/HTTPS protocol detection used on the main port) lets those
+         * callbacks — and any other client that assumes AWS lives on 443 — reach Floci.
+         *
+         * <p>Default {@code 443}. Set to {@code 0} to disable the extra binding (e.g. when Floci
+         * runs unprivileged or another process owns 443). When equal to {@link EmulatorConfig#port()}
+         * only a single listener is started. Env: FLOCI_TLS_AWS_HTTPS_PORT
+         */
+        @WithDefault("443")
+        int awsHttpsPort();
     }
 
     /**
@@ -1025,6 +1593,20 @@ public interface EmulatorConfig {
         /** Unix socket or TCP URL for the Docker daemon (e.g. unix:///var/run/docker.sock). */
         @WithDefault("unix:///var/run/docker.sock")
         String dockerHost();
+
+        /**
+         * Optional namespace inserted into Floci-managed child container and volume names.
+         * Useful when multiple Floci processes share one Docker daemon.
+         */
+        Optional<String> resourceNamespace();
+
+        /**
+         * Optional registry/repository base for every Docker image Floci launches.
+         * When set, images such as {@code postgres:16-alpine} and
+         * {@code public.ecr.aws/docker/library/ubuntu:24.04} resolve under this
+         * base before the container is created.
+         */
+        Optional<String> imageRegistryBase();
 
         /**
          * Path to a directory containing Docker's config.json (e.g. /root/.docker).

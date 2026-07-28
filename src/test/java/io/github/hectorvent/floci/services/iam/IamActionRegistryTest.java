@@ -106,6 +106,22 @@ class IamActionRegistryTest {
     }
 
     @Test
+    void resolvesRdsDataRestJsonRoutes() {
+        assertEquals("rds-data:ExecuteStatement", registry.resolve("rds-data",
+                mockCtx("POST", "/Execute", new MultivaluedHashMap<>(), MediaType.APPLICATION_JSON_TYPE, "{}")));
+        assertEquals("rds-data:ExecuteSql", registry.resolve("rds-data",
+                mockCtx("POST", "/ExecuteSql", new MultivaluedHashMap<>(), MediaType.APPLICATION_JSON_TYPE, "{}")));
+        assertEquals("rds-data:BatchExecuteStatement", registry.resolve("rds-data",
+                mockCtx("POST", "/BatchExecute", new MultivaluedHashMap<>(), MediaType.APPLICATION_JSON_TYPE, "{}")));
+        assertEquals("rds-data:BeginTransaction", registry.resolve("rds-data",
+                mockCtx("POST", "/BeginTransaction", new MultivaluedHashMap<>(), MediaType.APPLICATION_JSON_TYPE, "{}")));
+        assertEquals("rds-data:CommitTransaction", registry.resolve("rds-data",
+                mockCtx("POST", "/CommitTransaction", new MultivaluedHashMap<>(), MediaType.APPLICATION_JSON_TYPE, "{}")));
+        assertEquals("rds-data:RollbackTransaction", registry.resolve("rds-data",
+                mockCtx("POST", "/RollbackTransaction", new MultivaluedHashMap<>(), MediaType.APPLICATION_JSON_TYPE, "{}")));
+    }
+
+    @Test
     void returnsNullForUnknownRestJsonRoute() {
         ContainerRequestContext ctx = mockCtx(
                 "POST", "/some/unknown/path",
@@ -113,6 +129,32 @@ class IamActionRegistryTest {
                 MediaType.APPLICATION_JSON_TYPE,
                 "");
         assertNull(registry.resolve("kms", ctx));
+    }
+
+    @Test
+    void s3AclOnTrailingSlashKeyIsObjectLevel() {
+        // /bucket/folder/?acl — trailing slash is a valid key character, so this
+        // must be s3:GetObjectAcl, not s3:GetBucketAcl.
+        MultivaluedMap<String, String> acl = new MultivaluedHashMap<>();
+        acl.add("acl", "");
+        ContainerRequestContext ctx = mockCtx("GET", "/bucket/folder/", acl, null, "");
+        assertEquals("s3:GetObjectAcl", registry.resolve("s3", ctx));
+    }
+
+    @Test
+    void s3TaggingOnTrailingSlashKeyIsObjectLevel() {
+        MultivaluedMap<String, String> tagging = new MultivaluedHashMap<>();
+        tagging.add("tagging", "");
+        ContainerRequestContext ctx = mockCtx("GET", "/bucket/folder/", tagging, null, "");
+        assertEquals("s3:GetObjectTagging", registry.resolve("s3", ctx));
+    }
+
+    @Test
+    void s3AclOnBucketRootIsStillBucketLevel() {
+        MultivaluedMap<String, String> acl = new MultivaluedHashMap<>();
+        acl.add("acl", "");
+        ContainerRequestContext ctx = mockCtx("GET", "/bucket/", acl, null, "");
+        assertEquals("s3:GetBucketAcl", registry.resolve("s3", ctx));
     }
 
     // -------------------------------------------------------------------------

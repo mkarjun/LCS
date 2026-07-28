@@ -18,7 +18,10 @@ public class MultipartUpload {
     private String storageClass;
     private String contentDisposition;
     private String serverSideEncryption;
+    private String sseCustomerAlgorithm;
+    private String sseCustomerKeyMd5;
     private String acl;
+    private String checksumAlgorithm;
     private Map<String, String> metadata;
     private Instant initiated;
     private final Map<Integer, Part> parts = new ConcurrentHashMap<>();
@@ -59,8 +62,17 @@ public class MultipartUpload {
     public String getServerSideEncryption() { return serverSideEncryption; }
     public void setServerSideEncryption(String serverSideEncryption) { this.serverSideEncryption = serverSideEncryption; }
 
+    public String getSseCustomerAlgorithm() { return sseCustomerAlgorithm; }
+    public void setSseCustomerAlgorithm(String sseCustomerAlgorithm) { this.sseCustomerAlgorithm = sseCustomerAlgorithm; }
+
+    public String getSseCustomerKeyMd5() { return sseCustomerKeyMd5; }
+    public void setSseCustomerKeyMd5(String sseCustomerKeyMd5) { this.sseCustomerKeyMd5 = sseCustomerKeyMd5; }
+
     public String getAcl() { return acl; }
     public void setAcl(String acl) { this.acl = acl; }
+
+    public String getChecksumAlgorithm() { return checksumAlgorithm; }
+    public void setChecksumAlgorithm(String checksumAlgorithm) { this.checksumAlgorithm = checksumAlgorithm; }
 
     public Map<String, String> getMetadata() { return metadata; }
     public void setMetadata(Map<String, String> metadata) { this.metadata = metadata; }

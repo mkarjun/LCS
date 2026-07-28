@@ -29,6 +29,9 @@ final class AwsManagedPolicies {
                 "Provides full access to AWS services and resources, but does not allow management of Users and groups."),
         new ManagedPolicyDef("ReadOnlyAccess", "/",
                 "Provides read-only access to AWS services and resources."),
+        new ManagedPolicyDef("SecurityAudit", "/",
+                "The security audit template grants access to read security configuration metadata. "
+                + "It is useful for software that audits the configuration of an AWS account."),
         new ManagedPolicyDef("IAMFullAccess", "/",
                 "Provides full access to IAM."),
         new ManagedPolicyDef("AmazonS3FullAccess", "/",
@@ -39,6 +42,8 @@ final class AwsManagedPolicies {
                 "Provides full access to Amazon DynamoDB via the AWS Management Console."),
         new ManagedPolicyDef("AmazonEC2FullAccess", "/",
                 "Provides full access to Amazon EC2 via the AWS Management Console."),
+        new ManagedPolicyDef("AmazonEC2ContainerRegistryReadOnly", "/",
+                "Provides read-only access to Amazon EC2 Container Registry repositories."),
         new ManagedPolicyDef("AmazonSQSFullAccess", "/",
                 "Provides full access to Amazon SQS via the AWS Management Console."),
         new ManagedPolicyDef("AmazonSNSFullAccess", "/",
@@ -47,8 +52,20 @@ final class AwsManagedPolicies {
                 "Provides full access to Amazon VPC via the AWS Management Console."),
         new ManagedPolicyDef("CloudWatchFullAccess", "/",
                 "Provides full access to CloudWatch."),
+        new ManagedPolicyDef("CloudWatchAgentServerPolicy", "/",
+                "Provides permissions required to use the CloudWatch agent on servers."),
         new ManagedPolicyDef("AWSLambdaFullAccess", "/",
                 "Provides full access to Lambda, S3, DynamoDB, CloudWatch Metrics and Logs."),
+        new ManagedPolicyDef("AWSCloudFormationFullAccess", "/",
+                "Provides full access to AWS CloudFormation."),
+        new ManagedPolicyDef("AWSXRayDaemonWriteAccess", "/",
+                "Allows write permissions to the AWS X-Ray daemon."),
+        new ManagedPolicyDef("AmazonElasticFileSystemClientFullAccess", "/",
+                "Provides root client access to an Amazon EFS file system."),
+        new ManagedPolicyDef("AWSCloudTrail_FullAccess", "/",
+                "Provides full access to AWS CloudTrail."),
+        new ManagedPolicyDef("AWSCloudTrail_ReadOnlyAccess", "/",
+                "Provides read-only access to AWS CloudTrail."),
 
         // Lambda execution role policies
         new ManagedPolicyDef("AWSLambdaBasicExecutionRole", "/service-role/",
@@ -71,6 +88,23 @@ final class AwsManagedPolicies {
                 "Provides the Amazon ECS container agent and Fargate agent permissions to make AWS API calls on your behalf."),
         new ManagedPolicyDef("AmazonEKSFargatePodExecutionRolePolicy", "/",
                 "Provides access to other AWS service resources required to run Amazon EKS pods on AWS Fargate."),
+
+        // EKS cluster and node group policies (required by the EKS console/SDK and
+        // the terraform-aws-modules/eks module — see #1092).
+        new ManagedPolicyDef("AmazonEKSClusterPolicy", "/",
+                "Provides Kubernetes the permissions it requires to manage resources on your behalf."),
+        new ManagedPolicyDef("AmazonEKSServicePolicy", "/",
+                "This policy allows Amazon Elastic Container Service for Kubernetes to create and manage the necessary resources to operate EKS Clusters."),
+        new ManagedPolicyDef("AmazonEKSVPCResourceController", "/",
+                "Policy used by VPC Resource Controller to manage ENI and IPs for worker nodes."),
+        new ManagedPolicyDef("AmazonEKSWorkerNodePolicy", "/",
+                "This policy allows Amazon EKS worker nodes to connect to Amazon EKS Clusters."),
+        new ManagedPolicyDef("AmazonEKS_CNI_Policy", "/",
+                "Provides the Amazon VPC CNI Plugin the permissions it requires to modify the IP address configuration on your EKS worker nodes."),
+
+        // RDS execution role policy
+        new ManagedPolicyDef("AmazonRDSEnhancedMonitoringRole", "/service-role/",
+                "Provides permissions required for Amazon RDS Enhanced Monitoring."),
 
         // S3 Object Lambda execution role policy
         new ManagedPolicyDef("AmazonS3ObjectLambdaExecutionRolePolicy", "/service-role/",
@@ -95,6 +129,8 @@ final class AwsManagedPolicies {
                 "Provides permissions for AWS Systems Manager diagnosis automation execution."),
         new ManagedPolicyDef("AWS-SSM-RemediationAutomation-ExecutionRolePolicy", "/",
                 "Provides permissions for AWS Systems Manager remediation automation execution."),
+        new ManagedPolicyDef("AmazonSSMManagedInstanceCore", "/",
+                "Provides permissions required for instances to use AWS Systems Manager core service functionality."),
 
         // SageMaker execution role policies
         new ManagedPolicyDef("AmazonSageMakerGeospatialExecutionRole", "/service-role/",

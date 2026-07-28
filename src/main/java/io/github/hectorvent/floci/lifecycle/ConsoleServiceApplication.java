@@ -1517,7 +1517,8 @@ public class ConsoleServiceApplication {
                 String volumeType = defaultIfBlank(stringValue(request, "volumeType"), "gp3");
                 int size = intValue(request, "size", 8);
                 List<Tag> volumeTags = nameTag == null ? List.of() : List.of(new Tag("Name", nameTag));
-                Volume volume = ec2Service.createVolume(region, availabilityZone, volumeType, size, false, 0, null, volumeTags);
+                // snapshotId is null: this console flow creates empty volumes only.
+                Volume volume = ec2Service.createVolume(region, availabilityZone, volumeType, size, false, 0, null, null, volumeTags);
                 yield new ActionResult(volume.getVolumeId(), "Created volume " + safe(volume.getVolumeId()) + " in " + safe(volume.getAvailabilityZone()) + ".");
             }
             case "delete-volume" -> {

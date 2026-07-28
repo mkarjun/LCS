@@ -31,17 +31,30 @@ Floci exposes the classic Amazon SES Query API used by `aws ses ...` commands an
 | `UpdateAccountSendingEnabled`       | Enable or disable account-wide sending                    |
 | `ListVerifiedEmailAddresses`        | List verified email identities                            |
 | `DeleteVerifiedEmailAddress`        | Delete a verified email identity                          |
-| `SetIdentityNotificationTopic`      | Store SNS notification topic ARNs for an identity         |
+| `SetIdentityNotificationTopic`      | Set the SNS topic for an identity's bounce/complaint/delivery notifications |
 | `GetIdentityNotificationAttributes` | Read stored notification topic settings                   |
 | `SetIdentityFeedbackForwardingEnabled`     | Toggle feedback forwarding for an identity        |
 | `SetIdentityHeadersInNotificationsEnabled` | Toggle headers-in-notifications per notification type |
 | `SetIdentityMailFromDomain`         | Set or clear the MAIL FROM domain for an identity         |
 | `GetIdentityMailFromDomainAttributes` | Read MAIL FROM domain settings                          |
 | `GetIdentityDkimAttributes`         | Return DKIM status for identities                         |
+| `PutIdentityPolicy`                 | Create or replace a sending-authorization policy on an identity |
+| `GetIdentityPolicies`               | Return the requested policies for an identity             |
+| `ListIdentityPolicies`              | List an identity's policy names                           |
+| `DeleteIdentityPolicy`              | Delete a policy from an identity                          |
 | `CreateConfigurationSet`            | Create a configuration set                                |
 | `DescribeConfigurationSet`          | Read a configuration set                                  |
 | `ListConfigurationSets`             | List configuration sets                                   |
 | `DeleteConfigurationSet`            | Delete a configuration set                                |
+| `CreateConfigurationSetEventDestination` | Attach an event destination to a configuration set        |
+| `UpdateConfigurationSetEventDestination` | Update an existing event destination on a configuration set |
+| `DeleteConfigurationSetEventDestination` | Remove an event destination from a configuration set      |
+| `UpdateConfigurationSetSendingEnabled`   | Enable or disable email sending through a configuration set |
+| `CreateConfigurationSetTrackingOptions`  | Set the custom open/click tracking redirect domain |
+| `UpdateConfigurationSetTrackingOptions`  | Change the custom tracking redirect domain |
+| `DeleteConfigurationSetTrackingOptions`  | Remove the custom tracking redirect domain |
+| `UpdateConfigurationSetReputationMetricsEnabled` | Enable or disable reputation metrics for a configuration set |
+| `PutConfigurationSetDeliveryOptions` | Set the TLS policy (delivery options) for a configuration set |
 
 ## Configuration
 
@@ -146,8 +159,8 @@ curl $AWS_ENDPOINT_URL/_aws/ses
 
 - Identity verification succeeds immediately; no real DNS or inbox verification flow is required.
 - `SendEmail` stores the text body or the HTML body as the captured message body.
-- `SetIdentityNotificationTopic` stores SNS topic ARNs and returns them via `GetIdentityNotificationAttributes`.
-- Notification topics are configuration metadata only; SES delivery, bounce, or complaint events are not emitted automatically.
+- `SetIdentityNotificationTopic` publishes to the configured topic on a Bounce/Complaint/Delivery event (triggered via the mailbox simulator addresses or the suppression list), independent of any configuration set. The payload uses the legacy format (`notificationType`, no `mail.tags`, headers only when `SetIdentityHeadersInNotificationsEnabled` is on).
+- Identity (sending authorization) policies are stored and returned as metadata: the policy document, the per-identity limit of 20, and the create/update/delete error shapes match AWS, but Floci does not evaluate policy authorization (Principal-account existence, Resource-ARN match) or gate sending on it.
 - For the REST JSON API see [SES v2](#v2) below.
 
 ## SES v2 (REST JSON) {#v2}
@@ -168,6 +181,11 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `PUT` | `/v2/email/identities/{emailIdentity}/dkim` | `PutEmailIdentityDkimAttributes` |
 | `PUT` | `/v2/email/identities/{emailIdentity}/feedback` | `PutEmailIdentityFeedbackAttributes` |
 | `PUT` | `/v2/email/identities/{emailIdentity}/mail-from` | `PutEmailIdentityMailFromAttributes` |
+| `PUT` | `/v2/email/identities/{emailIdentity}/configuration-set` | `PutEmailIdentityConfigurationSetAttributes` |
+| `POST` | `/v2/email/identities/{emailIdentity}/policies/{policyName}` | `CreateEmailIdentityPolicy` |
+| `GET` | `/v2/email/identities/{emailIdentity}/policies` | `GetEmailIdentityPolicies` |
+| `PUT` | `/v2/email/identities/{emailIdentity}/policies/{policyName}` | `UpdateEmailIdentityPolicy` |
+| `DELETE` | `/v2/email/identities/{emailIdentity}/policies/{policyName}` | `DeleteEmailIdentityPolicy` |
 | `POST` | `/v2/email/outbound-emails` | `SendEmail` (simple / raw / templated) |
 | `POST` | `/v2/email/outbound-bulk-emails` | `SendBulkEmail` (templated, multiple destinations) |
 | `GET` | `/v2/email/account` | `GetAccount` |
@@ -183,6 +201,31 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `GET` | `/v2/email/configuration-sets` | `ListConfigurationSets` |
 | `GET` | `/v2/email/configuration-sets/{name}` | `GetConfigurationSet` |
 | `DELETE` | `/v2/email/configuration-sets/{name}` | `DeleteConfigurationSet` |
+| `POST` | `/v2/email/configuration-sets/{name}/event-destinations` | `CreateConfigurationSetEventDestination` |
+| `GET` | `/v2/email/configuration-sets/{name}/event-destinations` | `GetConfigurationSetEventDestinations` |
+| `PUT` | `/v2/email/configuration-sets/{name}/event-destinations/{eventDestinationName}` | `UpdateConfigurationSetEventDestination` |
+| `DELETE` | `/v2/email/configuration-sets/{name}/event-destinations/{eventDestinationName}` | `DeleteConfigurationSetEventDestination` |
+| `PUT` | `/v2/email/configuration-sets/{name}/suppression-options` | `PutConfigurationSetSuppressionOptions` |
+| `PUT` | `/v2/email/configuration-sets/{name}/sending` | `PutConfigurationSetSendingOptions` |
+| `PUT` | `/v2/email/configuration-sets/{name}/reputation-options` | `PutConfigurationSetReputationOptions` |
+| `PUT` | `/v2/email/configuration-sets/{name}/tracking-options` | `PutConfigurationSetTrackingOptions` |
+| `PUT` | `/v2/email/configuration-sets/{name}/delivery-options` | `PutConfigurationSetDeliveryOptions` |
+| `PUT` | `/v2/email/configuration-sets/{name}/archiving-options` | `PutConfigurationSetArchivingOptions` |
+| `PUT` | `/v2/email/configuration-sets/{name}/vdm-options` | `PutConfigurationSetVdmOptions` |
+| `POST` | `/v2/email/dedicated-ip-pools` | `CreateDedicatedIpPool` |
+| `GET` | `/v2/email/dedicated-ip-pools` | `ListDedicatedIpPools` |
+| `GET` | `/v2/email/dedicated-ip-pools/{PoolName}` | `GetDedicatedIpPool` |
+| `DELETE` | `/v2/email/dedicated-ip-pools/{PoolName}` | `DeleteDedicatedIpPool` |
+| `POST` | `/v2/email/contact-lists` | `CreateContactList` |
+| `GET` | `/v2/email/contact-lists` | `ListContactLists` |
+| `GET` | `/v2/email/contact-lists/{ContactListName}` | `GetContactList` |
+| `PUT` | `/v2/email/contact-lists/{ContactListName}` | `UpdateContactList` |
+| `DELETE` | `/v2/email/contact-lists/{ContactListName}` | `DeleteContactList` |
+| `POST` | `/v2/email/contact-lists/{ContactListName}/contacts` | `CreateContact` |
+| `POST` | `/v2/email/contact-lists/{ContactListName}/contacts/list` | `ListContacts` |
+| `GET` | `/v2/email/contact-lists/{ContactListName}/contacts/{EmailAddress}` | `GetContact` |
+| `PUT` | `/v2/email/contact-lists/{ContactListName}/contacts/{EmailAddress}` | `UpdateContact` |
+| `DELETE` | `/v2/email/contact-lists/{ContactListName}/contacts/{EmailAddress}` | `DeleteContact` |
 | `PUT` | `/v2/email/suppression/addresses` | `PutSuppressedDestination` |
 | `GET` | `/v2/email/suppression/addresses/{EmailAddress}` | `GetSuppressedDestination` |
 | `DELETE` | `/v2/email/suppression/addresses/{EmailAddress}` | `DeleteSuppressedDestination` |
@@ -191,8 +234,25 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `DELETE` | `/v2/email/tags?ResourceArn=...&TagKeys=...` | `UntagResource` |
 | `GET` | `/v2/email/tags?ResourceArn=...` | `ListTagsForResource` |
 
-Suppression list entries are stored per region. `Reason` is `BOUNCE` or `COMPLAINT`. `SendEmail` is not yet integrated with the suppression list, so suppressed addresses are still delivered locally.
+Configuration set event destinations are stored as configuration. The target is not validated for existence; missing targets cause Floci to log a warning and skip that destination. Each event destination must specify exactly one destination type and at least one matching event type. A CloudWatch destination requires a non-empty dimension configuration list, and a Pinpoint destination requires an application ARN.
+
+Floci publishes SES events to `SnsDestination`, `KinesisFirehoseDestination`, `EventBridgeDestination`, and `CloudWatchDestination`. `PinpointDestination` logs a warning and skips. The published payload follows the [AWS SES SNS notification format](https://docs.aws.amazon.com/ses/latest/dg/event-publishing-retrieving-sns-contents.html) with an outer `eventType` plus `mail` and event-type-specific blocks. Events fire whenever a configuration set has at least one event destination matching the event type — disable per-destination via `EventDestination.Enabled=false`, or remove the destination entirely.
+
+Floci recognises the AWS [mailbox simulator addresses](https://docs.aws.amazon.com/ses/latest/dg/send-an-email-from-console.html#send-email-simulator) for deterministic event-type emission:
+
+| Recipient address | Events emitted (in addition to `Send`) |
+|---|---|
+| `success@simulator.amazonses.com` | `Delivery` |
+| `bounce@simulator.amazonses.com` | `Bounce` |
+| `complaint@simulator.amazonses.com` | `Complaint` |
+| `suppressionlist@simulator.amazonses.com` | `Reject` |
+
+A successful send without a simulator-address recipient emits only the `Send` event.
+
+Suppression list entries are stored per region with `Reason` ∈ {`BOUNCE`, `COMPLAINT`}. At send time, a recipient is suppressed when it appears on the suppression list AND its stored `Reason` is contained in the **effective** `SuppressedReasons` for the send. The effective list is the configuration set's `SuppressionOptions.SuppressedReasons` (set via `PutConfigurationSetSuppressionOptions`) when present — an **empty list is preserved as an explicit "no suppression filtering for this configuration set"** — otherwise it falls back to the account-level `AccountSuppressionAttributes.SuppressedReasons` (set via `PutAccountSuppressionAttributes`, default `[BOUNCE, COMPLAINT]`). Following the AWS V2 contract, there is no dedicated `GetConfigurationSetSuppressionOptions` action; once set, the block is read back through `GetConfigurationSet`'s response (the field is omitted when the configuration set has no override).
+
+Suppressed recipients are filtered out of the SMTP relay step (non-suppressed recipients on the same send still reach the relay normally), and the configuration set's event destinations receive a synthetic `Bounce` or `Complaint` event alongside the always-emitted `Send` event. The `SendEmail` API response (`200` + `MessageId`), the stored `SentEmail` visible at `GET /_aws/ses`, and the published event's `mail.destination` all retain the original recipient list — matching the AWS contract that the message is "accepted, just not sent" for suppressed addresses.
 
 Tag operations support these ARN forms: `arn:aws:ses:<region>:<account>:configuration-set/<name>`, `arn:aws:ses:<region>:<account>:template/<name>`, and `arn:aws:ses:<region>:<account>:identity/<email-or-domain>`. Tags supplied to `CreateConfigurationSet`, `CreateEmailTemplate`, and `CreateEmailIdentity` are reachable through `ListTagsForResource`; `UpdateEmailTemplate` does not modify tags. Other resource types return `NotFoundException`.
 
-Identity, template, configuration-set, and sent-message state is shared between the v1 Query API and the v2 REST JSON API, so a template created with `CreateTemplate` resolves through `SendEmail` on v2 (and vice versa), a configuration set created with `CreateConfigurationSet` is visible to both `DescribeConfigurationSet` (v1) and `GetConfigurationSet` (v2), and every send appears in the same `GET /_aws/ses` inspection mailbox.
+Identity, identity-policy, template, configuration-set, and sent-message state is shared between the v1 Query API and the v2 REST JSON API, so a template created with `CreateTemplate` resolves through `SendEmail` on v2 (and vice versa), a policy written with `PutIdentityPolicy` (v1) is returned by `GetEmailIdentityPolicies` (v2), a configuration set created with `CreateConfigurationSet` is visible to both `DescribeConfigurationSet` (v1) and `GetConfigurationSet` (v2), and every send appears in the same `GET /_aws/ses` inspection mailbox.

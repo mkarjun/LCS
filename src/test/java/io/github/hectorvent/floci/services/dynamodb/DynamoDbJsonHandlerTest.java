@@ -1,19 +1,17 @@
 package io.github.hectorvent.floci.services.dynamodb;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.dynamodb.model.AttributeDefinition;
 import io.github.hectorvent.floci.services.dynamodb.model.KeySchemaElement;
 import io.github.hectorvent.floci.services.dynamodb.model.TableDefinition;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-
-import jakarta.ws.rs.core.Response;
-
-import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -31,11 +29,11 @@ class DynamoDbJsonHandlerTest {
         handler = new DynamoDbJsonHandler(service, null, null, mapper);
     }
 
-    private TableDefinition createUsersTable() {
+    private TableDefinition createUsersTable(String region) {
         return service.createTable("Users",
                 List.of(new KeySchemaElement("userId", "HASH")),
                 List.of(new AttributeDefinition("userId", "S")),
-                5L, 5L);
+                5L, 5L, region);
     }
 
     private ObjectNode attributeValue(String type, String value) {
@@ -70,9 +68,9 @@ class DynamoDbJsonHandlerTest {
 
     @Test
     void updateItemReturnValuesUpdatedNew()  throws Exception {
-        createUsersTable();
+        createUsersTable("us-east-1");
 
-        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"));
+        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"), "us-east-1");
 
         ObjectNode key = item("userId", "u-fallback");
 
@@ -110,7 +108,7 @@ class DynamoDbJsonHandlerTest {
     
     @Test
     void updateItemReturnValuesUpdatedNewOnNewItem() throws Exception {
-        createUsersTable();
+        createUsersTable("us-east-1");
 
         // Item does not exist - UpdateItem creates it
         ObjectNode key = item("userId", "u-new");
@@ -147,9 +145,9 @@ class DynamoDbJsonHandlerTest {
 
     @Test
     void updateItemReturnValuesUpdatedOld()  throws Exception {
-        createUsersTable();
+        createUsersTable("us-east-1");
 
-        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"));
+        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"), "us-east-1");
 
         ObjectNode key = item("userId", "u-fallback");
 
@@ -187,9 +185,9 @@ class DynamoDbJsonHandlerTest {
     
     @Test
     void updateItemReturnValuesAllOld()  throws Exception {
-        createUsersTable();
+        createUsersTable("us-east-1");
 
-        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"));
+        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"), "us-east-1");
 
         ObjectNode key = item("userId", "u-fallback");
 
@@ -229,9 +227,9 @@ class DynamoDbJsonHandlerTest {
     
     @Test
     void updateItemReturnValuesAllNew()  throws Exception {
-        createUsersTable();
+        createUsersTable("us-east-1");
 
-        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"));
+        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"), "us-east-1");
 
         ObjectNode key = item("userId", "u-fallback");
 
@@ -271,9 +269,9 @@ class DynamoDbJsonHandlerTest {
     
     @Test
     void updateItemReturnValuesNone()  throws Exception {
-        createUsersTable();
+        createUsersTable("us-east-1");
 
-        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"));
+        service.putItem("Users", item("userId", "u-fallback", "delAttr", "old", "changeAttr", "val1", "sameAttr", "static"), "us-east-1");
 
         ObjectNode key = item("userId", "u-fallback");
 
@@ -294,5 +292,45 @@ class DynamoDbJsonHandlerTest {
 
         assertNotNull(responseData);
         assertFalse(responseData.has("Attributes"), "Attributes property must not be present");
+    }
+
+    // Reproduces #1604
+    @Test
+    void transactWriteItemsCancellationReasonMessageIsNullForNonFailedItems() throws Exception {
+        createUsersTable("us-east-1");
+        service.putItem("Users", item("userId", "A"), "us-east-1");
+
+        ObjectNode condCheckA = mapper.createObjectNode();
+        condCheckA.put("TableName", "Users");
+        condCheckA.set("Key", item("userId", "A"));
+        condCheckA.put("ConditionExpression", "attribute_exists(userId)");
+
+        ObjectNode condCheckB = mapper.createObjectNode();
+        condCheckB.put("TableName", "Users");
+        condCheckB.set("Key", item("userId", "B"));
+        condCheckB.put("ConditionExpression", "attribute_exists(userId)");
+
+        ObjectNode txItemA = mapper.createObjectNode();
+        txItemA.set("ConditionCheck", condCheckA);
+        ObjectNode txItemB = mapper.createObjectNode();
+        txItemB.set("ConditionCheck", condCheckB);
+
+        ObjectNode request = mapper.createObjectNode();
+        ArrayNode txItems = request.putArray("TransactItems");
+        txItems.add(txItemA);
+        txItems.add(txItemB);
+
+        Response response = handler.handle("TransactWriteItems", request, "us-east-1");
+
+        assertEquals(400, response.getStatus());
+
+        JsonNode body = mapper.convertValue(response.getEntity(), JsonNode.class);
+        assertEquals("TransactionCanceledException", body.get("__type").asText());
+
+        ArrayNode reasons = (ArrayNode) body.get("CancellationReasons");
+        assertEquals(2, reasons.size());
+
+        assertEquals("None", reasons.get(0).get("Code").asText());
+        assertNull(reasons.get(0).get("Message"), "non failed item must not have a Message field");
     }
 }

@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing! Floci is a community-driven project and all contributions are welcome.
 
+**Join us on [Slack](https://join.slack.com/t/floci/shared_invite/zt-3tjn02s3q-A00kEjJ1cZxsg_imTfy6Cw)** — it is the fastest way to reach maintainers. Ask about AWS behaviour, sanity-check an approach before you build it, or get unstuck on a PR.
+
 ## Ways to Contribute
 
 - **Bug reports** — open an issue with a minimal reproduction
@@ -121,14 +123,14 @@ Do not include `Co-Authored-By` trailers for AI tools in commit messages. Attrib
 
 ## Architecture
 
-See [AGENT.md](AGENT.md) for a detailed description of the three-layer architecture (Controller → Service → Storage), the AWS wire protocol mapping, and conventions for adding new services.
+See [AGENTS.md](AGENTS.md) for a detailed description of the three-layer architecture (Controller → Service → Storage), the AWS wire protocol mapping, and conventions for adding new services.
 
-`AGENT.md` is the canonical agent instructions file for this repository. If your coding agent expects a different filename, create a local symlink to `AGENT.md` instead of copying the file.
+`AGENTS.md` is the canonical agent instructions file for this repository, following the [AGENTS.md standard](https://agents.md/). If your coding agent expects a different filename, create a local symlink to `AGENTS.md` instead of copying the file.
 
 ```bash
-ln -s AGENT.md CLAUDE.md
-ln -s AGENT.md GEMINI.md
-ln -s AGENT.md COPILOT.md
+ln -s AGENTS.md CLAUDE.md
+ln -s AGENTS.md GEMINI.md
+ln -s AGENTS.md COPILOT.md
 ```
 
 ## Adding a New AWS Service
@@ -149,7 +151,7 @@ Always implement the **real AWS wire protocol** — never invent custom endpoint
 
 1. Branch off `main`: `git checkout -b feature/my-feature`
 2. Open a PR targeting `main`.
-3. CI runs tests automatically — all checks must pass before merge.
+3. CI runs tests automatically — all checks must pass before merge.v
 4. Keep PRs focused — one feature or fix per PR.
 5. Reference any related issues in the PR description.
 
@@ -211,6 +213,25 @@ If a pull request does not include new tests, the author should explain why in t
 Maintainers may request additional or more targeted test coverage before approving a PR.
 
 CI runs automatically on every pull request, and build/test checks must pass before merge.
+
+## Documentation: Action Tables
+
+The **Supported Actions** tables in `docs/services/*.md` are generated from handler
+source, so they cannot drift from the code. The action list comes from the handler
+(`case "X" ->` arms or REST controller methods); the **Description** column is
+hand-written and preserved across regeneration, keyed by action name.
+
+- **Do not hand-edit** the action rows between the `<!-- floci:actions:start -->` and
+  `<!-- floci:actions:end -->` markers. Edit the handler, then regenerate.
+- After adding or changing a handler action, run `make docs-sync` and commit the
+  updated doc alongside your code. Fill in the `-` placeholder description for any new
+  row.
+- `make docs-check` (run in CI) fails if a registered service's table is out of date,
+  or if a new switch handler is neither registered in `tools/docs/services.yaml` nor
+  listed under `deferred_handlers`.
+- `make docs-test` runs the tooling's unit tests.
+
+Registering a new service is one entry in `tools/docs/services.yaml`.
 
 ## Reporting Security Issues
 

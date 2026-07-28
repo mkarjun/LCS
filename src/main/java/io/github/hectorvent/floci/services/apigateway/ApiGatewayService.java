@@ -1,10 +1,13 @@
 package io.github.hectorvent.floci.services.apigateway;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import io.github.hectorvent.floci.services.apigateway.model.EndpointConfiguration;
+import io.github.hectorvent.floci.services.apigateway.model.EndpointType;
 import org.jboss.logging.Logger;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -55,6 +58,11 @@ public class ApiGatewayService {
     private final StorageBackend<String, Account> accountStore;
     private final StorageBackend<String, CustomDomain> domainStore;
     private final StorageBackend<String, BasePathMapping> basePathMappingStore;
+
+    // Constants
+    private static final String EPC_KEY = "endpointConfiguration";
+    private static final String EPC_TYPES_KEY = "types";
+    private static final String EPC_VPC_IDS_KEY = "vpcEndpointIds";
 
     @Inject
     public ApiGatewayService(StorageFactory storageFactory, EmulatorConfig config) {
@@ -174,6 +182,60 @@ public class ApiGatewayService {
         api.setCreatedDate(System.currentTimeMillis() / 1000L);
         api.setTags(tags);
 
+        EndpointConfiguration endpointConfiguration = new EndpointConfiguration();
+        if (request.get(EPC_KEY) instanceof Map<?, ?> epMap) {
+            epMap.forEach((k, v) -> {
+                if (k instanceof String ks && v instanceof List<?> list) {
+                    if (EPC_TYPES_KEY.equals(ks)) {
+                        List<EndpointType> types = list.stream()
+                                .filter(String.class::isInstance)
+                                .map(String.class::cast)
+                                .map(String::toUpperCase)
+                                .map(typeStr -> {
+                                    try {
+                                        return EndpointType.valueOf(typeStr);
+                                    } catch (IllegalArgumentException e) {
+                                        throw new AwsException("BadRequestException",
+                                                "Endpoint configuration type must be REGIONAL, EDGE, or PRIVATE.", 400);
+                                    }
+                                })
+                                .toList();
+                        endpointConfiguration.setTypes(types);
+                    } else if (EPC_VPC_IDS_KEY.equals(ks)) {
+                        List<String> vpcIds = list.stream()
+                                .filter(String.class::isInstance)
+                                .map(String.class::cast)
+                                .toList();
+                        endpointConfiguration.setVpcEndpointIds(vpcIds);
+                    }
+                }
+            });
+        }
+
+        // Set default type if omitted
+        if (endpointConfiguration.getTypes().isEmpty()) {
+            endpointConfiguration.setTypes(List.of(EndpointType.REGIONAL));
+        }
+
+        // Enforce exactly one type
+        if (endpointConfiguration.getTypes().size() != 1) {
+            throw new AwsException("BadRequestException",
+                    "Endpoint configuration types must contain exactly one value.", 400);
+        }
+
+        EndpointType type = endpointConfiguration.getTypes().getFirst();
+        if (EndpointType.PRIVATE.equals(type)) {
+            if (endpointConfiguration.getVpcEndpointIds().isEmpty()) {
+                throw new AwsException("BadRequestException",
+                        "At least one vpcEndpointId is required for PRIVATE APIs.", 400);
+            }
+        } else {
+            // Reject/ignore vpcEndpointIds for REGIONAL and EDGE
+            endpointConfiguration.setVpcEndpointIds(new ArrayList<>());
+        }
+
+        api.setEndpointConfiguration(endpointConfiguration);
+
         apiStore.put(apiKey(region, api.getId()), api);
 
         // Create root resource "/"
@@ -189,6 +251,18 @@ public class ApiGatewayService {
     public RestApi getRestApi(String region, String apiId) {
         return apiStore.get(apiKey(region, apiId))
                 .orElseThrow(() -> new AwsException("NotFoundException", "Invalid API id specified", 404));
+    }
+
+    public String resolveRestApiRegion(String preferredRegion, String apiId) {
+        if (apiStore.get(apiKey(preferredRegion, apiId)).isPresent()) {
+            return preferredRegion;
+        }
+
+        return apiStore.keys().stream()
+                .filter(k -> k.endsWith("::" + apiId))
+                .map(k -> k.substring(0, k.indexOf("::")))
+                .findFirst()
+                .orElse(preferredRegion);
     }
 
     public List<RestApi> getRestApis(String region) {
@@ -587,6 +661,12 @@ public class ApiGatewayService {
         apiKey.setCreatedDate(System.currentTimeMillis() / 1000L);
         apiKey.setLastUpdatedDate(apiKey.getCreatedDate());
 
+        Map<String, String> tags = new HashMap<>();
+        if (request.get("tags") instanceof Map<?, ?> rawTags) {
+            rawTags.forEach((key, value) -> tags.put(String.valueOf(key), String.valueOf(value)));
+        }
+        apiKey.setTags(tags);
+
         apiKeyStore.put(apiKeyGlobalKey(region, apiKey.getId()), apiKey);
         LOG.infov("Created API Key {0}", apiKey.getId());
         return apiKey;
@@ -594,7 +674,7 @@ public class ApiGatewayService {
 
     public ApiKey getApiKey(String region, String apiKeyId) {
         return apiKeyStore.get(apiKeyGlobalKey(region, apiKeyId))
-                .orElseThrow(() -> new AwsException("NotFoundException", "API Key not found", 404));
+                .orElseThrow(() -> new AwsException("NotFoundException", "Invalid API Key identifier specified", 404));
     }
 
     public List<ApiKey> getApiKeys(String region) {

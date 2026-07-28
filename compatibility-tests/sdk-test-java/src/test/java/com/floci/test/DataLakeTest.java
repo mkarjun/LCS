@@ -11,11 +11,13 @@ import software.amazon.awssdk.services.glue.GlueClient;
 import software.amazon.awssdk.services.glue.model.*;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @DisplayName("Data Lake (Athena + Glue + Firehose)")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -91,23 +93,11 @@ class DataLakeTest {
 
         String queryId = startResp.queryExecutionId();
 
-        // Wait for query
-        int attempts = 0;
-        QueryExecutionStatus status = null;
-        while (attempts < 30) {
-            GetQueryExecutionResponse getResp = athena.getQueryExecution(GetQueryExecutionRequest.builder()
-                    .queryExecutionId(queryId)
-                    .build());
-            status = getResp.queryExecution().status();
-            if (status.state() == QueryExecutionState.SUCCEEDED) break;
-            if (status.state() == QueryExecutionState.FAILED) {
-                Assertions.fail("Query failed: " + status.stateChangeReason());
-            }
-            Thread.sleep(1000);
-            attempts++;
-        }
-
-        assertThat(status.state()).isEqualTo(QueryExecutionState.SUCCEEDED);
+        QueryExecutionStatus status = TestFixtures.awaitAthenaQueryTerminal(
+                athena, queryId, Duration.ofSeconds(60));
+        assertThat(status.state())
+                .as("Athena query did not succeed: %s", status.stateChangeReason())
+                .isEqualTo(QueryExecutionState.SUCCEEDED);
 
         GetQueryResultsResponse results = athena.getQueryResults(GetQueryResultsRequest.builder()
                 .queryExecutionId(queryId)
@@ -126,5 +116,67 @@ class DataLakeTest {
         // Data row: sum(amount) = 10+20+30+40+50 = 150
         String total = results.resultSet().rows().get(1).data().get(0).varCharValue();
         assertThat(Double.parseDouble(total)).isEqualTo(150.0);
+    }
+
+    @Test
+    @org.junit.jupiter.api.Order(3)
+    void glueUserDefinedFunctionsLifecycle() {
+        String functionName = "sdk_udf__integer";
+        glue.createUserDefinedFunction(CreateUserDefinedFunctionRequest.builder()
+                .databaseName(DB_NAME)
+                .functionInput(UserDefinedFunctionInput.builder()
+                        .functionName(functionName)
+                        .className("ExampleFunction")
+                        .ownerName("owner")
+                        .ownerType(PrincipalType.USER)
+                        .resourceUris(ResourceUri.builder()
+                                .resourceType(ResourceType.FILE)
+                                .uri("s3://floci-firehose-results/function.json")
+                                .build())
+                        .build())
+                .build());
+
+        UserDefinedFunction created = glue.getUserDefinedFunction(GetUserDefinedFunctionRequest.builder()
+                .databaseName(DB_NAME)
+                .functionName(functionName)
+                .build()).userDefinedFunction();
+        assertThat(created.functionName()).isEqualTo(functionName);
+        assertThat(created.databaseName()).isEqualTo(DB_NAME);
+        assertThat(created.ownerName()).isEqualTo("owner");
+        assertThat(created.createTime()).isNotNull();
+        assertThat(created.resourceUris()).hasSize(1);
+
+        assertThat(glue.getUserDefinedFunctions(GetUserDefinedFunctionsRequest.builder()
+                .databaseName(DB_NAME)
+                .pattern("sdk_udf__.*")
+                .build()).userDefinedFunctions())
+                .extracting(UserDefinedFunction::functionName)
+                .containsExactly(functionName);
+
+        glue.updateUserDefinedFunction(UpdateUserDefinedFunctionRequest.builder()
+                .databaseName(DB_NAME)
+                .functionName(functionName)
+                .functionInput(UserDefinedFunctionInput.builder()
+                        .functionName(functionName)
+                        .className("ExampleFunction")
+                        .ownerName("new-owner")
+                        .ownerType(PrincipalType.USER)
+                        .build())
+                .build());
+        UserDefinedFunction updated = glue.getUserDefinedFunction(GetUserDefinedFunctionRequest.builder()
+                .databaseName(DB_NAME)
+                .functionName(functionName)
+                .build()).userDefinedFunction();
+        assertThat(updated.ownerName()).isEqualTo("new-owner");
+
+        glue.deleteUserDefinedFunction(DeleteUserDefinedFunctionRequest.builder()
+                .databaseName(DB_NAME)
+                .functionName(functionName)
+                .build());
+        assertThrows(EntityNotFoundException.class, () -> glue.getUserDefinedFunction(
+                GetUserDefinedFunctionRequest.builder()
+                        .databaseName(DB_NAME)
+                        .functionName(functionName)
+                        .build()));
     }
 }

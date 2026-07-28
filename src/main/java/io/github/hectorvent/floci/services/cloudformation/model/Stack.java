@@ -1,8 +1,13 @@
 package io.github.hectorvent.floci.services.cloudformation.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import io.quarkus.runtime.annotations.RegisterForReflection;
+
 import java.time.Instant;
 import java.util.*;
 
+@RegisterForReflection
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Stack {
     private String stackId;
     private String stackName;
@@ -22,6 +27,7 @@ public class Stack {
     private List<StackEvent> events = new ArrayList<>();
     private Map<String, ChangeSet> changeSets = new LinkedHashMap<>();
     private Map<String, String> tags = new LinkedHashMap<>();
+    private boolean enableTerminationProtection = false;
 
     public String getStackId() { return stackId; }
     public void setStackId(String stackId) { this.stackId = stackId; }
@@ -57,4 +63,6 @@ public class Stack {
     public void setChangeSets(Map<String, ChangeSet> changeSets) { this.changeSets = changeSets; }
     public Map<String, String> getTags() { return tags; }
     public void setTags(Map<String, String> tags) { this.tags = tags; }
+    public boolean isEnableTerminationProtection() { return enableTerminationProtection; }
+    public void setEnableTerminationProtection(boolean enableTerminationProtection) { this.enableTerminationProtection = enableTerminationProtection; }
 }

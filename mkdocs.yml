@@ -7,20 +7,21 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
-  logo: assets/floci.png
-  favicon: assets/floci.png
+  custom_dir: overrides
+  logo: assets/floci-header.svg
+  favicon: assets/floci.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -92,10 +93,13 @@ nav:
     - IAM: services/iam.md
     - STS: services/sts.md
     - ElastiCache: services/elasticache.md
+    - MemoryDB: services/memorydb.md
     - RDS: services/rds.md
+    - RDS Data API: services/rds-data.md
     - MSK (Kafka): services/msk.md
     - Glue: services/glue.md
     - Neptune: services/neptune.md
+    - DocumentDB: services/docdb.md
     - Athena: services/athena.md
     - Data Firehose: services/firehose.md
     - EventBridge: services/eventbridge.md
@@ -109,16 +113,34 @@ nav:
     - EKS: services/eks.md
     - OpenSearch: services/opensearch.md
     - EC2: services/ec2.md
+    - Lightsail: services/lightsail.md
     - AppConfig: services/appconfig.md
     - Bedrock Runtime: services/bedrock-runtime.md
     - ELB v2: services/elb.md
     - Auto Scaling: services/autoscaling.md
+    - Elastic Beanstalk: services/elastic-beanstalk.md
     - CodeBuild: services/codebuild.md
+    - AWS Batch: services/batch.md
     - CodeDeploy: services/codedeploy.md
+    - CodePipeline: services/codepipeline.md
     - AWS Backup: services/backup.md
+    - CloudTrail: services/cloudtrail.md
     - CloudFront: services/cloudfront.md
     - Route53: services/route53.md
+    - AWS Cloud Map: services/cloudmap.md
+    - AWS IoT Core: services/iot.md
+    - AppSync: services/appsync.md
     - Transfer Family: services/transfer.md
+    - AWS Config: services/config.md
+    - CloudTrail: services/cloudtrail.md
+    - EMR: services/emr.md
+    - WAF v2: services/wafv2.md
+    - Textract: services/textract.md
+    - Transcribe: services/transcribe.md
+    - Pricing: services/pricing.md
+    - Cost Explorer: services/ce.md
+    - Cost and Usage Reports: services/cur.md
+    - BCM Data Exports: services/bcm-data-exports.md
   - Testcontainers:
     - Overview: testcontainers/index.md
     - Java: testcontainers/java.md

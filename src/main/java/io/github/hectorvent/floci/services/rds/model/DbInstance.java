@@ -3,6 +3,10 @@ package io.github.hectorvent.floci.services.rds.model;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @RegisterForReflection
 public class DbInstance {
@@ -19,16 +23,25 @@ public class DbInstance {
     private DbEndpoint endpoint;
     private boolean iamDatabaseAuthenticationEnabled;
     private String parameterGroupName;
+    private String dbSubnetGroupName;
     private String dbClusterIdentifier;
+    private String vpcId;
+    private List<String> vpcSecurityGroupIds = new ArrayList<>();
+    private String availabilityZone;
+    private boolean multiAz;
+    private Map<String, String> subnetAvailabilityZones = new LinkedHashMap<>();
     private String dbiResourceId;
     private String dbInstanceArn;
+    private String masterUserSecretArn;
+    private String masterUserSecretStatus;
+    private String masterUserSecretKmsKeyId;
+    private Map<String, String> tags = new LinkedHashMap<>();
     private Instant createdAt;
     private int proxyPort;
 
-    private String dockerVolumeName; // null in in-memory mode; "floci-rds-<id>" otherwise
-    private String volumeId; // 6-char hex, generated once at creation; null on older persisted resources
+    private String dockerVolumeName;
+    private String volumeId;
 
-    // Transient — not persisted; restored on startup by re-launching containers
     private transient String containerId;
     private transient String containerHost;
     private transient int containerPort;
@@ -96,14 +109,50 @@ public class DbInstance {
     public String getParameterGroupName() { return parameterGroupName; }
     public void setParameterGroupName(String parameterGroupName) { this.parameterGroupName = parameterGroupName; }
 
+    public String getDbSubnetGroupName() { return dbSubnetGroupName; }
+    public void setDbSubnetGroupName(String dbSubnetGroupName) { this.dbSubnetGroupName = dbSubnetGroupName; }
+
     public String getDbClusterIdentifier() { return dbClusterIdentifier; }
     public void setDbClusterIdentifier(String dbClusterIdentifier) { this.dbClusterIdentifier = dbClusterIdentifier; }
+
+    public String getVpcId() { return vpcId; }
+    public void setVpcId(String vpcId) { this.vpcId = vpcId; }
+
+    public List<String> getVpcSecurityGroupIds() { return vpcSecurityGroupIds; }
+    public void setVpcSecurityGroupIds(List<String> vpcSecurityGroupIds) {
+        this.vpcSecurityGroupIds = vpcSecurityGroupIds != null ? new ArrayList<>(vpcSecurityGroupIds) : new ArrayList<>();
+    }
+
+    public String getAvailabilityZone() { return availabilityZone; }
+    public void setAvailabilityZone(String availabilityZone) { this.availabilityZone = availabilityZone; }
+
+    public boolean isMultiAz() { return multiAz; }
+    public void setMultiAz(boolean multiAz) { this.multiAz = multiAz; }
+
+    public Map<String, String> getSubnetAvailabilityZones() { return subnetAvailabilityZones; }
+    public void setSubnetAvailabilityZones(Map<String, String> subnetAvailabilityZones) {
+        this.subnetAvailabilityZones = subnetAvailabilityZones != null
+                ? new LinkedHashMap<>(subnetAvailabilityZones)
+                : new LinkedHashMap<>();
+    }
 
     public String getDbiResourceId() { return dbiResourceId; }
     public void setDbiResourceId(String dbiResourceId) { this.dbiResourceId = dbiResourceId; }
 
     public String getDbInstanceArn() { return dbInstanceArn; }
     public void setDbInstanceArn(String dbInstanceArn) { this.dbInstanceArn = dbInstanceArn; }
+
+    public String getMasterUserSecretArn() { return masterUserSecretArn; }
+    public void setMasterUserSecretArn(String masterUserSecretArn) { this.masterUserSecretArn = masterUserSecretArn; }
+
+    public String getMasterUserSecretStatus() { return masterUserSecretStatus; }
+    public void setMasterUserSecretStatus(String masterUserSecretStatus) { this.masterUserSecretStatus = masterUserSecretStatus; }
+
+    public String getMasterUserSecretKmsKeyId() { return masterUserSecretKmsKeyId; }
+    public void setMasterUserSecretKmsKeyId(String masterUserSecretKmsKeyId) { this.masterUserSecretKmsKeyId = masterUserSecretKmsKeyId; }
+
+    public Map<String, String> getTags() { return tags; }
+    public void setTags(Map<String, String> tags) { this.tags = tags != null ? new LinkedHashMap<>(tags) : new LinkedHashMap<>(); }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

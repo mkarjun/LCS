@@ -6,14 +6,19 @@ import io.github.hectorvent.floci.core.common.docker.ContainerBuilder;
 import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
 import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
 import io.github.hectorvent.floci.core.common.docker.ContainerLogStreamer;
+import io.github.hectorvent.floci.core.common.docker.CurrentContainerNetworkResolver;
 import io.github.hectorvent.floci.core.common.docker.ContainerSpec;
 import io.github.hectorvent.floci.core.common.docker.PortAllocator;
+import com.github.dockerjava.api.model.Container;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -30,9 +35,13 @@ class EcrRegistryManagerTest {
 
     private static final int BASE_PORT = 6100;
     private static final int MAX_PORT = 6101; // pool of exactly two ports
+    private static final String REGISTRY_NAME = "floci-test-ecr-registry";
 
     private PortAllocator portAllocator;
     private ContainerLifecycleManager lifecycleManager;
+    private ContainerDetector containerDetector;
+    private CurrentContainerNetworkResolver currentContainerNetworkResolver;
+    private EmulatorConfig.DockerConfig docker;
     private EcrRegistryManager manager;
 
     @BeforeEach
@@ -49,25 +58,29 @@ class EcrRegistryManagerTest {
         when(lifecycleManager.findByName(anyString())).thenReturn(Optional.empty());
 
         ContainerLogStreamer logStreamer = Mockito.mock(ContainerLogStreamer.class);
-        ContainerDetector containerDetector = Mockito.mock(ContainerDetector.class);
+        containerDetector = Mockito.mock(ContainerDetector.class);
+        currentContainerNetworkResolver = Mockito.mock(CurrentContainerNetworkResolver.class);
         RegionResolver regionResolver = new RegionResolver("us-east-1", "000000000000");
 
         EmulatorConfig config = Mockito.mock(EmulatorConfig.class);
         EmulatorConfig.EcrServiceConfig ecr = Mockito.mock(EmulatorConfig.EcrServiceConfig.class);
+        docker = Mockito.mock(EmulatorConfig.DockerConfig.class);
         EmulatorConfig.StorageConfig storage = Mockito.mock(EmulatorConfig.StorageConfig.class);
         when(config.services()).thenReturn(Mockito.mock(EmulatorConfig.ServicesConfig.class));
         when(config.services().ecr()).thenReturn(ecr);
+        when(config.docker()).thenReturn(docker);
         when(config.storage()).thenReturn(storage);
+        when(docker.resourceNamespace()).thenReturn(Optional.empty());
         // Empty host-persistent-path selects named-volume mode (no host bind-mount logic).
         when(storage.hostPersistentPath()).thenReturn("");
-        when(ecr.registryContainerName()).thenReturn("floci-test-ecr-registry");
+        when(ecr.registryContainerName()).thenReturn(REGISTRY_NAME);
         when(ecr.registryImage()).thenReturn("registry:2");
         when(ecr.registryBasePort()).thenReturn(BASE_PORT);
         when(ecr.registryMaxPort()).thenReturn(MAX_PORT);
         when(ecr.dockerNetwork()).thenReturn(Optional.empty());
 
         manager = new EcrRegistryManager(containerBuilder, lifecycleManager, logStreamer,
-                containerDetector, portAllocator, config, regionResolver);
+                containerDetector, currentContainerNetworkResolver, portAllocator, config, regionResolver);
     }
 
     @Test
@@ -86,5 +99,53 @@ class EcrRegistryManagerTest {
             assertFalse(ex.getMessage().contains("No free port available"),
                     "port pool leaked on attempt " + attempt + ": " + ex.getMessage());
         }
+    }
+
+    @Test
+    void httpClient_usesRegistryContainerDnsWhenRunningInsideDocker() {
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+
+        assertEquals("http://" + REGISTRY_NAME + ":5000", manager.httpClient().baseUrl());
+    }
+
+    @Test
+    void adoptUsesPublishedHostPortEvenWhenRunningInsideDocker() {
+        // Regression: in container mode adopt()'s endpoint resolves to the registry's
+        // internal port (5000); the advertised proxy endpoint must use the published
+        // host binding instead, or docker login from the host daemon fails.
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        Container existing = Mockito.mock(Container.class);
+        when(existing.getId()).thenReturn("0123456789abcdef");
+        when(lifecycleManager.findByName(REGISTRY_NAME)).thenReturn(Optional.of(existing));
+        when(lifecycleManager.adopt("0123456789abcdef", List.of(5000)))
+                .thenReturn(new ContainerLifecycleManager.ContainerInfo("0123456789abcdef",
+                        Map.of(5000, new ContainerLifecycleManager.EndpointInfo("172.17.0.5", 5000)),
+                        Map.of(5000, BASE_PORT + 1)));
+
+        manager.ensureStarted();
+
+        assertEquals(BASE_PORT + 1, manager.effectivePort());
+        assertEquals("http://localhost:" + (BASE_PORT + 1), manager.getProxyEndpoint());
+    }
+
+    @Test
+    void adoptKeepsConfiguredPortWhenNoPublishedBindingExists() {
+        Container existing = Mockito.mock(Container.class);
+        when(existing.getId()).thenReturn("0123456789abcdef");
+        when(lifecycleManager.findByName(REGISTRY_NAME)).thenReturn(Optional.of(existing));
+        when(lifecycleManager.adopt("0123456789abcdef", List.of(5000)))
+                .thenReturn(new ContainerLifecycleManager.ContainerInfo("0123456789abcdef", Map.of()));
+
+        manager.ensureStarted();
+
+        assertEquals(BASE_PORT, manager.effectivePort());
+    }
+
+    @Test
+    void httpClient_usesNamespacedRegistryContainerDnsWhenConfigured() {
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        when(docker.resourceNamespace()).thenReturn(Optional.of("run/one"));
+
+        assertEquals("http://floci-run-one-test-ecr-registry:5000", manager.httpClient().baseUrl());
     }
 }

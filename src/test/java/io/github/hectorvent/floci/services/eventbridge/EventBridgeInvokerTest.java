@@ -1,15 +1,23 @@
 package io.github.hectorvent.floci.services.eventbridge;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import io.github.hectorvent.floci.services.batch.BatchService;
+import io.github.hectorvent.floci.services.eventbridge.model.BatchParameters;
 import io.github.hectorvent.floci.services.eventbridge.model.InputTransformer;
 import io.github.hectorvent.floci.services.eventbridge.model.Target;
+import io.github.hectorvent.floci.services.firehose.FirehoseService;
+import io.github.hectorvent.floci.services.firehose.model.Record;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
 import io.github.hectorvent.floci.services.sns.SnsService;
 import io.github.hectorvent.floci.services.sqs.SqsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
+
+import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -19,16 +27,22 @@ class EventBridgeInvokerTest {
 
     private EventBridgeInvoker invoker;
     private SqsService sqsService;
+    private BatchService batchService;
+    private FirehoseService firehoseService;
 
     @BeforeEach
     void setUp() {
         LambdaService lambdaService = mock(LambdaService.class);
         sqsService = mock(SqsService.class);
         SnsService snsService = mock(SnsService.class);
+        batchService = mock(BatchService.class);
+        firehoseService = mock(FirehoseService.class);
         invoker = new EventBridgeInvoker(
                 lambdaService,
                 sqsService,
                 snsService,
+                batchService,
+                firehoseService,
                 new ObjectMapper(),
                 mock(io.github.hectorvent.floci.config.EmulatorConfig.class)
         );
@@ -42,6 +56,107 @@ class EventBridgeInvokerTest {
         invoker.invokeTarget(target, event, "eu-west-1");
 
         verify(sqsService).sendMessage(anyString(), eq(event), anyInt(), isNull(), isNull(), eq("eu-west-1"));
+    }
+
+    @Test
+    void invokeTarget_batchTarget_submitsBatchJobWithParametersFromPayload() throws Exception {
+        JsonNode retryStrategy = new ObjectMapper().readTree("{\"Attempts\":2}");
+        Target target = new Target("id1",
+                "arn:aws:batch:us-west-2:000000000000:job-queue/my-queue",
+                "{\"Parameters\":{\"inputKey\":\"inputs/1.json\",\"count\":2}}",
+                null);
+        BatchParameters batchParameters = new BatchParameters();
+        batchParameters.setJobDefinition("my-job:1");
+        batchParameters.setJobName("scheduled-job");
+        batchParameters.setRetryStrategy(retryStrategy);
+        target.setBatchParameters(batchParameters);
+
+        invoker.invokeTarget(target, "{\"ignored\":true}", "us-east-1");
+
+        verify(batchService).submitFromEventBridge(
+                eq("arn:aws:batch:us-west-2:000000000000:job-queue/my-queue"),
+                eq("my-job:1"),
+                eq("scheduled-job"),
+                eq(Map.of("inputKey", "inputs/1.json", "count", "2")),
+                eq(retryStrategy),
+                eq("us-west-2")
+        );
+    }
+
+    @Test
+    void invokeTarget_batchTargetDoesNotMapFlatPayloadToParameters() {
+        Target target = new Target("id1",
+                "arn:aws:batch:us-west-2:000000000000:job-queue/my-queue",
+                "{\"inputKey\":\"ignored\"}",
+                null);
+        BatchParameters batchParameters = new BatchParameters();
+        batchParameters.setJobDefinition("my-job:1");
+        batchParameters.setJobName("scheduled-job");
+        target.setBatchParameters(batchParameters);
+
+        invoker.invokeTarget(target, "{\"ignored\":true}", "us-east-1");
+
+        verify(batchService).submitFromEventBridge(
+                eq("arn:aws:batch:us-west-2:000000000000:job-queue/my-queue"),
+                eq("my-job:1"),
+                eq("scheduled-job"),
+                eq(Map.of()),
+                isNull(),
+                eq("us-west-2")
+        );
+    }
+
+    @Test
+    void invokeTarget_batchTargetWithoutExplicitInputDoesNotMapEventEnvelopeToParameters() {
+        Target target = new Target("id1",
+                "arn:aws:batch:us-west-2:000000000000:job-queue/my-queue",
+                null,
+                null);
+        BatchParameters batchParameters = new BatchParameters();
+        batchParameters.setJobDefinition("my-job:1");
+        batchParameters.setJobName("scheduled-job");
+        target.setBatchParameters(batchParameters);
+
+        invoker.invokeTarget(target, """
+                {"source":"local.test","region":"us-east-1","detail":{"inputKey":"ignored"}}
+                """, "us-east-1");
+
+        verify(batchService).submitFromEventBridge(
+                eq("arn:aws:batch:us-west-2:000000000000:job-queue/my-queue"),
+                eq("my-job:1"),
+                eq("scheduled-job"),
+                eq(Map.of()),
+                isNull(),
+                eq("us-west-2")
+        );
+    }
+
+    @Test
+    void invokeTarget_firehoseTarget_putsEventJsonAsRecordData() {
+        Target target = new Target("id1",
+                "arn:aws:firehose:us-east-1:000000000000:deliverystream/my-stream", null, null);
+        String event = "{\"source\":\"local.test\",\"detail\":{\"orderId\":\"o-1\"}}";
+
+        invoker.invokeTarget(target, event, "us-east-1");
+
+        ArgumentCaptor<Record> captor = ArgumentCaptor.forClass(Record.class);
+        verify(firehoseService).putRecord(eq("my-stream"), captor.capture());
+        // The event JSON is the record Data verbatim: no wrapping, no trailing newline.
+        assertEquals(event, new String(captor.getValue().getData(), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void invokeTarget_firehoseTarget_deliversInputOverrideNotEnvelope() {
+        Target target = new Target("id1",
+                "arn:aws:firehose:us-east-1:000000000000:deliverystream/my-stream",
+                "{\"custom\":\"payload\"}", null);
+
+        invoker.invokeTarget(target, "{\"ignored\":true}", "us-east-1");
+
+        ArgumentCaptor<Record> captor = ArgumentCaptor.forClass(Record.class);
+        verify(firehoseService).putRecord(eq("my-stream"), captor.capture());
+        assertEquals("{\"custom\":\"payload\"}",
+                new String(captor.getValue().getData(), StandardCharsets.UTF_8));
     }
 
     @Test
