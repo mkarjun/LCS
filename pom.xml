@@ -9,8 +9,15 @@
     <version>1.5.19</version>
     <packaging>jar</packaging>
 
-    <name>Floci</name>
+    <name>LCS</name>
     <description>Fast, free, open-source local AWS emulator supporting SSM, SQS, SNS, SES, S3, DynamoDB, Lambda, API Gateway, Cognito, KMS, Kinesis, Secrets Manager, CloudFormation, Step Functions, IAM, STS, ElastiCache, RDS, EventBridge, and CloudWatch</description>
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/license/mit</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
@@ -263,6 +270,68 @@
     </build>
 
     <profiles>
+        <!--
+            Builds the React/Cloudscape console into
+            src/main/resources/META-INF/resources/_lcs/ui so it ships inside the
+            runtime image.
+
+            Active by default; skip with -Dconsole.skip=true for backend-only
+            iteration. The plugin downloads its own Node, so no host Node install is
+            required. Build output is derived and gitignored — skipping the profile
+            produces an image without the console UI.
+        -->
+        <profile>
+            <id>console</id>
+            <activation>
+                <property>
+                    <name>!console.skip</name>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>com.github.eirslett</groupId>
+                        <artifactId>frontend-maven-plugin</artifactId>
+                        <version>1.15.1</version>
+                        <configuration>
+                            <workingDirectory>console</workingDirectory>
+                            <installDirectory>${project.build.directory}</installDirectory>
+                            <nodeVersion>v22.19.0</nodeVersion>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>install-node-and-npm</id>
+                                <goals>
+                                    <goal>install-node-and-npm</goal>
+                                </goals>
+                                <phase>generate-resources</phase>
+                            </execution>
+                            <execution>
+                                <id>npm-ci</id>
+                                <goals>
+                                    <goal>npm</goal>
+                                </goals>
+                                <phase>generate-resources</phase>
+                                <configuration>
+                                    <arguments>ci --no-fund --no-audit</arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>npm-build</id>
+                                <goals>
+                                    <goal>npm</goal>
+                                </goals>
+                                <phase>generate-resources</phase>
+                                <configuration>
+                                    <arguments>run build</arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <profile>
             <id>native</id>
             <activation>

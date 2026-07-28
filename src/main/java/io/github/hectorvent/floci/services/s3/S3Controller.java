@@ -99,6 +99,13 @@ public class S3Controller {
     // --- Bucket operations ---
 
     @GET
+    @Path(S3VirtualHostFilter.INTERNAL_LIST_BUCKETS_SEGMENT)
+    @Produces(MediaType.APPLICATION_XML)
+    public Response listBucketsInternal(@HeaderParam("X-Amz-Target") String target) {
+        return listBuckets(target);
+    }
+
+    @GET
     @Produces(MediaType.APPLICATION_XML)
     public Response listBuckets(@HeaderParam("X-Amz-Target") String target) {
         if (target != null) {

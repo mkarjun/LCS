@@ -5,10 +5,31 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.NullSource;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class S3VirtualHostFilterTest {
+
+    @Test
+    void detectsSignedPathStyleListBucketsRequest() {
+        assertTrue(S3VirtualHostFilter.isPathStyleListBucketsRequest(
+                "GET",
+                "/",
+                "AWS4-HMAC-SHA256 Credential=test/20260529/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "POST, /, AWS4-HMAC-SHA256 Credential=test/20260529/us-east-1/s3/aws4_request",
+            "GET, /bucket, AWS4-HMAC-SHA256 Credential=test/20260529/us-east-1/s3/aws4_request",
+            "GET, /, AWS4-HMAC-SHA256 Credential=test/20260529/us-east-1/iam/aws4_request",
+            "GET, /, ''"
+    })
+    void ignoresNonListBucketsOrNonS3Requests(String method, String path, String auth) {
+        assertFalse(S3VirtualHostFilter.isPathStyleListBucketsRequest(method, path, auth));
+    }
 
     // --- extractBucket with baseHostname ---
 

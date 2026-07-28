@@ -96,6 +96,16 @@ class IamActionRegistryTest {
     }
 
     @Test
+    void resolvesInternalS3RootAliasToListAllMyBuckets() {
+        ContainerRequestContext ctx = mockCtx(
+                "GET", "/__s3_root__",
+                new MultivaluedHashMap<>(),
+                MediaType.APPLICATION_XML_TYPE,
+                "");
+        assertEquals("s3:ListAllMyBuckets", registry.resolve("s3", ctx));
+    }
+
+    @Test
     void returnsNullForUnknownRestJsonRoute() {
         ContainerRequestContext ctx = mockCtx(
                 "POST", "/some/unknown/path",

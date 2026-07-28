@@ -18,21 +18,25 @@
 
 ---
 
-## What is Floci?
+## What is LCS?
 
-Floci is a free, open-source local AWS emulator for development, testing, and CI.
+LCS is a free, open-source local AWS emulator for development, testing, and CI.
+
+LCS is built from the Floci codebase and continues as an MIT-licensed derivative with preserved upstream attribution.
 
 It gives you AWS-shaped services on your machine without requiring a cloud account, an auth token, or paid feature gates. Point your AWS SDK, CLI, Terraform, CDK, OpenTofu, or test suite at `http://localhost:4566` and keep your existing workflows.
 
-Floci is named after [floccus](https://en.wikipedia.org/wiki/Cirrocumulus_floccus), the cloud formation that looks like popcorn.
+LCS stands for Local Cloud Services.
 
 ## Quick Start
 
-The fastest way to run Floci is with the official [CLI](https://github.com/floci-io/floci-cli)
+The fastest way to run LCS is with the official [CLI](https://github.com/floci-io/floci-cli)
 
 ```bash
 floci start
 ```
+
+Open `http://localhost:4566` in a browser for the dashboard.
 
 Export the AWS environment variables:
 
@@ -56,7 +60,7 @@ aws dynamodb list-tables
 
 ### Watch it run
 
-This short demo shows the CLI flow: start Floci, export the local AWS environment, run standard AWS CLI commands, and stop the emulator.
+This short demo shows the CLI flow: start LCS, export the local AWS environment, run standard AWS CLI commands, and stop the emulator.
 
 https://github.com/user-attachments/assets/b55714dc-ef36-40ae-a734-cd2cadc288a8
 
@@ -75,7 +79,7 @@ services:
       - "4566:4566"
 ```
 
-Start Floci:
+Start LCS:
 
 ```bash
 docker compose up
@@ -157,7 +161,7 @@ LocalStack's community edition [sunset in March 2026](https://blog.localstack.cl
 | Startup time | ~24 ms | ~3.3 s |
 | Idle memory | ~13 MiB | ~143 MiB |
 | Docker image size | ~90 MB | ~1.0 GB |
-| License | MIT | Restricted |
+| License | MIT with preserved upstream Floci attribution | Restricted |
 | API Gateway v2 / HTTP API | Yes | No |
 | Cognito | Yes | No |
 | RDS, ElastiCache, MSK | Real Docker | No |
@@ -771,4 +775,7 @@ Join the Floci community on [Slack](https://join.slack.com/t/floci/shared_invite
 
 ## License
 
-MIT. Use it however you want.
+MIT.
+
+LCS is built from the Floci codebase and preserves upstream attribution in
+[NOTICE](NOTICE) and [LICENSES/UPSTREAM-FLOCI-MIT.txt](LICENSES/UPSTREAM-FLOCI-MIT.txt).

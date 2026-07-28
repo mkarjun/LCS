@@ -1,0 +1,10 @@
+LCS is built from and derived from the Floci codebase.
+
+Upstream attribution:
+Copyright (c) 2025 Hector Ventura
+
+LCS remains MIT-licensed. The repository-level MIT license is in LICENSE.
+The preserved upstream MIT notice is also kept in
+LICENSES/UPSTREAM-FLOCI-MIT.txt.
+
+This notice is for provenance and attribution. It does not replace LICENSE.

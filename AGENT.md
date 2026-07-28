@@ -1,4 +1,4 @@
-Guidance for AI coding agents working in the Floci repository.
+Guidance for AI coding agents working in the LCS repository.
 
 This file defines repository-specific operating rules for autonomous or semi-autonomous coding agents. Follow these instructions unless a maintainer explicitly tells you otherwise.
 
@@ -6,11 +6,11 @@ This file defines repository-specific operating rules for autonomous or semi-aut
 
 ## Project Overview
 
-Floci is a Java-based local AWS emulator built on Quarkus.
+LCS is a Java-based local AWS emulator built on Quarkus.
 
 Its goal is full AWS SDK and AWS CLI compatibility through real AWS wire protocols, not convenience APIs or simplified abstractions.
 
-Floci acts as an open-source alternative to LocalStack Community.
+LCS acts as an open-source alternative to LocalStack Community.
 
 - Port: 4566
 - Stack:
@@ -29,7 +29,7 @@ When making changes, follow these priorities:
 
 1. Preserve AWS protocol compatibility
 2. Match AWS SDK and CLI behavior
-3. Reuse existing Floci patterns
+3. Reuse existing LCS patterns
 4. Prefer correctness over convenience
 5. Keep changes narrow and testable
 
@@ -38,13 +38,13 @@ Critical rules:
 - Do not introduce custom endpoint shapes
 - Do not change request or response formats for convenience
 - Do not perform broad refactors unless the task explicitly requires them
-- Keep behavior aligned with AWS expectations and existing Floci conventions
+- Keep behavior aligned with AWS expectations and existing LCS conventions
 
 ---
 
 ## Architecture
 
-Floci follows a layered design:
+LCS follows a layered design:
 
 - **Controller / Handler**
   - Parses AWS protocol input
@@ -71,11 +71,11 @@ Floci follows a layered design:
 
 ## Package Layout
 
-- `io.github.hectorvent.floci.config`
-- `io.github.hectorvent.floci.core.common`
-- `io.github.hectorvent.floci.core.storage`
-- `io.github.hectorvent.floci.lifecycle`
-- `io.github.hectorvent.floci.services.<service>`
+- `io.github.hectorvent.LCS.config`
+- `io.github.hectorvent.LCS.core.common`
+- `io.github.hectorvent.LCS.core.storage`
+- `io.github.hectorvent.LCS.lifecycle`
+- `io.github.hectorvent.LCS.services.<service>`
 
 Typical service structure:
 
@@ -91,7 +91,7 @@ Copy an existing service pattern before introducing a new one.
 
 ## AWS Protocol Rules
 
-Floci must implement real AWS wire protocols.
+LCS must implement real AWS wire protocols.
 
 | Protocol | Services | Request Format | Response Format | Implementation |
 |----------|----------|----------------|-----------------|----------------|
@@ -152,7 +152,7 @@ When adding storage-related behavior:
 
 ## Configuration Rules
 
-Configuration lives under `floci.*`.
+Configuration lives under `LCS.*`.
 
 When adding config:
 
@@ -160,7 +160,7 @@ When adding config:
 2. Add it to main `application.yml`
 3. Add it to test `application.yml` if needed
 4. Update documentation if user-facing
-5. Follow `FLOCI_*` environment variable conventions
+5. Follow `LCS_*` environment variable conventions
 
 Critical areas:
 
@@ -349,7 +349,7 @@ Treat release workflows as critical infrastructure.
 If behavior is unclear:
 
 1. Prefer AWS behavior
-2. Then existing Floci behavior
+2. Then existing LCS behavior
 3. Then compatibility test expectations
 
 If a task would require broad architectural changes, stop and surface the tradeoffs instead of refactoring across services blindly.

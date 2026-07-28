@@ -14,6 +14,8 @@ import jakarta.ws.rs.container.ContainerRequestContext;
 @ApplicationScoped
 public class ResourceArnBuilder {
 
+    private static final String S3_INTERNAL_LIST_BUCKETS_SEGMENT = "__s3_root__";
+
     public String build(String credentialScope, ContainerRequestContext ctx,
                         String region, String accountId) {
         String path = ctx.getUriInfo().getPath();
@@ -35,7 +37,7 @@ public class ResourceArnBuilder {
     private String buildS3Arn(String path) {
         // path: /bucket or /bucket/key
         String stripped = path.startsWith("/") ? path.substring(1) : path;
-        if (stripped.isEmpty()) {
+        if (stripped.isEmpty() || S3_INTERNAL_LIST_BUCKETS_SEGMENT.equals(stripped)) {
             return AwsArnUtils.Arn.of("s3", "", "", "*").toString();
         }
         int slash = stripped.indexOf('/');

@@ -29,3 +29,11 @@ test-results.xml
 
 *.log
 
+
+# Console (React/Cloudscape UI)
+console/node_modules/
+# Derived build output — produced by the `console` Maven profile.
+src/main/resources/META-INF/resources/_lcs/ui/
+# The console lock file is committed for reproducible `npm ci` builds,
+# overriding the blanket package-lock.json rule above.
+!console/package-lock.json

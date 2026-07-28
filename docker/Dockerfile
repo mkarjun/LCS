@@ -7,6 +7,10 @@ RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
 COPY pom.xml .
 RUN mvn dependency:go-offline -q
 
+# The `console` Maven profile builds the React UI into
+# src/main/resources/META-INF/resources/_lcs/ui during generate-resources.
+# frontend-maven-plugin downloads its own Node, so no Node install is needed here.
+COPY console/ console/
 COPY src/ src/
 RUN mvn clean package -DskipTests -q
 

@@ -12,7 +12,7 @@ import jakarta.ws.rs.core.Response;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-@Path("{prefix:(_floci|_localstack)}")
+@Path("{prefix:(_lcs|_floci|_localstack)}")
 @Produces(MediaType.APPLICATION_JSON)
 public class EmulatorInfoController {
 
@@ -33,7 +33,7 @@ public class EmulatorInfoController {
         return Response.ok(Map.of(
                 "services", serviceRegistry.getServices(),
                 "edition", "community",
-                "original_edition", "floci-always-free",
+                "original_edition", "lcs-open-source",
                 "version", version)).build();
     }
 
@@ -62,7 +62,7 @@ public class EmulatorInfoController {
     @GET
     @Path("/info")
     public Response info() {
-        return Response.ok(Map.of("version", version, "edition", "community", "original_edition", "floci-always-free")).build();
+        return Response.ok(Map.of("version", version, "edition", "community", "original_edition", "lcs-open-source")).build();
     }
 
     @GET

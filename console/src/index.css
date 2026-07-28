@@ -1,0 +1,17 @@
+/*
+ * Cloudscape's AppLayout sizes itself against the viewport, so the document has to
+ * be a full-height, margin-free container or the layout stops short and leaves an
+ * unstyled band below the content.
+ */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Keep the page background in step with the active Cloudscape color mode. */
+body {
+  background-color: var(--color-background-layout-main, #ffffff);
+}

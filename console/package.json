@@ -1,0 +1,30 @@
+{
+  "name": "lcs-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LCS console — React + Cloudscape UI driven by the AWS SDK against the local emulator.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ec2": "^3.1096.0",
+    "@aws-sdk/client-s3": "^3.699.0",
+    "@cloudscape-design/board-components": "^3.0.210",
+    "@cloudscape-design/components": "^3.0.0",
+    "@cloudscape-design/global-styles": "^1.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

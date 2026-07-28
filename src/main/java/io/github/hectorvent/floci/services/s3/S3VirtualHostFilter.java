@@ -18,6 +18,8 @@ import java.net.URI;
 @ApplicationScoped
 public class S3VirtualHostFilter implements ContainerRequestFilter {
 
+    public static final String INTERNAL_LIST_BUCKETS_SEGMENT = "__s3_root__";
+
     private final String baseHostname;
 
     @Inject
@@ -52,11 +54,18 @@ public class S3VirtualHostFilter implements ContainerRequestFilter {
             return;
         }
 
-        String bucket = extractBucket(host, baseHostname);
-        if (bucket == null) return;
-
         URI uri = requestContext.getUriInfo().getRequestUri();
         String path = uri.getRawPath();
+
+        String bucket = extractBucket(host, baseHostname);
+        if (bucket == null) {
+            if (isPathStyleListBucketsRequest(requestContext.getMethod(), path, auth)) {
+                requestContext.setRequestUri(UriBuilder.fromUri(uri)
+                        .replacePath("/" + INTERNAL_LIST_BUCKETS_SEGMENT)
+                        .build());
+            }
+            return;
+        }
 
         // Do not rewrite S3 Control API paths — the account ID appears as a host label
         // in the S3ControlClient but the path belongs to the S3 Control service, not S3.
@@ -72,6 +81,18 @@ public class S3VirtualHostFilter implements ContainerRequestFilter {
                 .build();
 
         requestContext.setRequestUri(newUri);
+    }
+
+    static boolean isPathStyleListBucketsRequest(String method, String path, String auth) {
+        if (!"GET".equals(method)) {
+            return false;
+        }
+        if (!("/".equals(path) || path == null || path.isBlank())) {
+            return false;
+        }
+        return auth != null
+                && auth.contains("Credential=")
+                && auth.contains("/s3/aws4_request");
     }
 
     /**

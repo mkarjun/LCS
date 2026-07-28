@@ -1,4 +1,4 @@
-site_name: Floci
+site_name: LCS
 site_description: Fast, free, open-source local AWS emulator
 site_url: https://floci.io/floci/
 repo_url: https://github.com/floci-io/floci
@@ -64,6 +64,8 @@ nav:
     - Environment Variables: configuration/environment-variables.md
     - Docker Images: configuration/docker-images.md
     - Docker Compose: configuration/docker-compose.md
+    - LCS Rebrand Policy: configuration/lcs-rebrand.md
+    - Microservice Draft: configuration/microservices.md
     - Ports Reference: configuration/ports.md
     - Multi-Account Isolation: configuration/multi-account.md
     - Storage Modes: configuration/storage.md

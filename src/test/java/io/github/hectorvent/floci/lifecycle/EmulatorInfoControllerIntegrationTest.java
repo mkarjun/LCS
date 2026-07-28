@@ -19,7 +19,7 @@ class EmulatorInfoControllerIntegrationTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     // Core services that must always be present and running.
-    // New services can be added to Floci without updating this list —
+    // New services can be added to LCS without updating this list —
     // the test verifies all known services are present, not an exact set.
     private static final List<String> CORE_SERVICES = List.of(
             "ssm", "sqs", "s3", "dynamodb", "sns", "lambda",
@@ -34,7 +34,7 @@ class EmulatorInfoControllerIntegrationTest {
     );
 
     @ParameterizedTest
-    @ValueSource(strings = {"/_floci/health", "/_localstack/health"})
+    @ValueSource(strings = {"/_lcs/health", "/_floci/health", "/_localstack/health"})
     void health_returnsSameResponseOnBothPaths(String path) throws Exception {
         String body = given()
             .when().get(path)
@@ -45,7 +45,7 @@ class EmulatorInfoControllerIntegrationTest {
 
         JsonNode tree = MAPPER.readTree(body);
         assertEquals("community", tree.get("edition").asText());
-        assertEquals("floci-always-free", tree.get("original_edition").asText());
+        assertEquals("lcs-open-source", tree.get("original_edition").asText());
         assertEquals("dev", tree.get("version").asText());
 
         JsonNode services = tree.get("services");
@@ -57,7 +57,7 @@ class EmulatorInfoControllerIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/_floci/init", "/_localstack/init"})
+    @ValueSource(strings = {"/_lcs/init", "/_floci/init", "/_localstack/init"})
     void init_returnsLifecycleStateOnBothPaths(String path) {
         given()
             .when().get(path)
@@ -75,7 +75,7 @@ class EmulatorInfoControllerIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/_floci/info", "/_localstack/info"})
+    @ValueSource(strings = {"/_lcs/info", "/_floci/info", "/_localstack/info"})
     void info_returnsVersionAndEditionOnBothPaths(String path) {
         given()
             .when().get(path)
@@ -87,13 +87,13 @@ class EmulatorInfoControllerIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/_floci/diagnose", "/_localstack/diagnose"})
+    @ValueSource(strings = {"/_lcs/diagnose", "/_floci/diagnose", "/_localstack/diagnose"})
     void diagnose_returns200OnBothPaths(String path) {
         given().when().get(path).then().statusCode(200).contentType("application/json");
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/_floci/config", "/_localstack/config"})
+    @ValueSource(strings = {"/_lcs/config", "/_floci/config", "/_localstack/config"})
     void config_returns200OnBothPaths(String path) {
         given().when().get(path).then().statusCode(200).contentType("application/json");
     }

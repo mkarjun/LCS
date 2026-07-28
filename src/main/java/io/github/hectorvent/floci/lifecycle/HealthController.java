@@ -28,7 +28,7 @@ public class HealthController {
         return Response.ok(Map.of(
                 "services", serviceRegistry.getServices(),
                 "edition", "community",
-                "original_edition", "floci-always-free",
+                "original_edition", "lcs-open-source",
                 "version", version)).build();
     }
 

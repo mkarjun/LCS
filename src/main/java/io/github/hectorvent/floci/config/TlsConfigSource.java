@@ -147,7 +147,28 @@ public class TlsConfigSource implements ConfigSource {
         if (value != null && !value.isBlank())
             return value;
 
-        // 2. Environment variable (underscore + uppercase)
+        // 2. LCS system-property alias for floci.* keys
+        if (key.startsWith("floci.")) {
+            String aliasKey = "lcs." + key.substring("floci.".length());
+            value = System.getProperty(aliasKey);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+
+        // 3. LCS environment-variable alias should win over legacy FLOCI_* env vars.
+        if (key.startsWith("floci.")) {
+            String aliasEnvKey = "LCS_" + key.substring("floci.".length())
+                    .replace('.', '_')
+                    .replace('-', '_')
+                    .toUpperCase();
+            value = System.getenv(aliasEnvKey);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+
+        // 4. Legacy environment variable (underscore + uppercase)
         String envKey = key.replace('.', '_').replace('-', '_').toUpperCase();
         value = System.getenv(envKey);
         if (value != null && !value.isBlank())

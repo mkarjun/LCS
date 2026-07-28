@@ -4,6 +4,10 @@
 !docker/localstack-parity.sh
 !pom.xml
 !src/**
+!console/**
+# Dependencies and build output are produced inside the image, never copied in.
+console/node_modules/**
+console/dist/**
 !target/*.so
 !target/*.properties
 !target/*-runner

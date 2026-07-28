@@ -1,18 +1,18 @@
-# Floci
+# LCS
 
 <p align="center">
-  <img src="assets/floci.png" alt="Floci" width="500" />
+  <img src="assets/floci.png" alt="LCS" width="500" />
 </p>
 
 <p align="center"><em>Light, fluffy, and always free</em></p>
 
 ---
 
-Floci is a fast, free, and open-source local AWS service emulator built for developers who need reliable AWS services in development and CI without cost, complexity, or vendor lock-in.
+LCS is a fast, free, and open-source local AWS service emulator built for developers who need reliable AWS services in development and CI without cost, complexity, or vendor lock-in.
 
 ## Supported Services
 
-Floci emulates 51 AWS services. See the [Services Overview](services/index.md) for per-service operation counts, endpoints, and full protocol details.
+LCS emulates 51 AWS services. See the [Services Overview](services/index.md) for per-service operation counts, endpoints, and full protocol details.
 
 | Service | Protocol |
 |---|---|
@@ -64,7 +64,7 @@ Floci emulates 51 AWS services. See the [Services Overview](services/index.md) f
 | BCM Data Exports | JSON 1.1 |
 | Transfer Family | JSON 1.1 |
 
-## Why Floci?
+## Why LCS?
 
 **No account required.** No auth tokens, no sign-ups, no telemetry. Pull the image and start building.
 

@@ -27,11 +27,13 @@ import jakarta.ws.rs.core.MediaType;
 public class IamActionRegistry {
 
     private static final Logger LOG = Logger.getLogger(IamActionRegistry.class);
+    private static final String S3_INTERNAL_LIST_BUCKETS_PATH = "/__s3_root__";
 
     private record ActionRule(String service, String method, Pattern pathPattern, String action) {}
 
     private static final List<ActionRule> RULES = List.of(
         // ── S3 ─────────────────────────────────────────────────────────────────
+        rule("s3", "GET",    "^" + S3_INTERNAL_LIST_BUCKETS_PATH + "/?$", "s3:ListAllMyBuckets"),
         rule("s3", "GET",    "^/?$",                              "s3:ListAllMyBuckets"),
         rule("s3", "PUT",    "^/[^/]+/?$",                       "s3:CreateBucket"),
         rule("s3", "DELETE", "^/[^/]+/?$",                       "s3:DeleteBucket"),
