@@ -1,53 +1,36 @@
-import type { ServiceCategory } from "@services/catalog";
-
-/**
- * Service icon.
- *
- * Deliberately NOT AWS's own service icons. The AWS Architecture Icons are licensed
- * separately from the SDKs and Cloudscape, and their terms restrict redistribution and
- * modification — shipping them inside a third-party emulator's console would be a
- * trademark and licensing problem, not a parity win. Cloudscape (Apache 2.0) ships no
- * service icons either.
- *
- * Instead each service gets a tile whose colour comes from its AWS category, which is how
- * the AWS console groups services. That keeps navigation scannable and colour-coded
- * without copying protected assets.
- */
-const CATEGORY_COLORS: Record<ServiceCategory, string> = {
-  Analytics: "#8C4FFF",
-  "Application Integration": "#E7157B",
-  "Business Applications": "#DD344C",
-  "Cloud Financial Management": "#00A4A6",
-  Compute: "#ED7100",
-  Containers: "#ED7100",
-  Database: "#2E27AD",
-  "Developer Tools": "#3334B9",
-  "Front-end Web & Mobile": "#E7157B",
-  "Machine Learning": "#01A88D",
-  "Management & Governance": "#E7157B",
-  "Networking & Content Delivery": "#8C4FFF",
-  "Security, Identity, & Compliance": "#DD344C",
-  Storage: "#7AA116",
-};
+import { findById, findByPath } from "@services/catalog";
+import type { CatalogEntry } from "@services/catalog";
+import { CATEGORY_COLORS, GLYPH_STROKE_WIDTH, glyphFor } from "./serviceGlyphs";
 
 interface ServiceIconProps {
-  category: ServiceCategory;
-  shortName: string;
+  /** Emulator service id, e.g. "s3". Either this or `entry` is required. */
+  serviceId?: string;
+  /** Route path, e.g. "opensearch", when only the path is known. */
+  servicePath?: string;
+  entry?: CatalogEntry;
   size?: number;
 }
 
-/** Up to two initials, so "Step Functions" reads "SF" and "S3" stays "S3". */
-function initials(shortName: string): string {
-  const compact = shortName.replace(/[^A-Za-z0-9 ]/g, "").trim();
-  const words = compact.split(/\s+/);
-  if (words.length === 1) {
-    return words[0].slice(0, 2).toUpperCase();
-  }
-  return (words[0][0] + words[1][0]).toUpperCase();
-}
+/**
+ * Square, category-coloured service icon with an original pictogram.
+ *
+ * Resolves the catalog entry itself so callers can pass whichever identifier they have —
+ * navigation has a path, search has an id, service pages have the entry.
+ */
+export function ServiceIcon({ serviceId, servicePath, entry, size = 24 }: ServiceIconProps) {
+  const resolved =
+    entry ??
+    (serviceId !== undefined ? findById(serviceId) : undefined) ??
+    (servicePath !== undefined ? findByPath(servicePath) : undefined);
 
-export function ServiceIcon({ category, shortName, size = 24 }: ServiceIconProps) {
-  const color = CATEGORY_COLORS[category];
+  if (resolved === undefined) {
+    return null;
+  }
+
+  const color = CATEGORY_COLORS[resolved.category];
+  const glyph = glyphFor(resolved.id, resolved.category);
+  const inset = Math.round(size * 0.16);
+
   return (
     <span
       aria-hidden="true"
@@ -58,17 +41,24 @@ export function ServiceIcon({ category, shortName, size = 24 }: ServiceIconProps
         width: size,
         height: size,
         minWidth: size,
-        borderRadius: Math.max(4, size * 0.18),
+        borderRadius: Math.max(4, Math.round(size * 0.2)),
         background: color,
-        color: "#ffffff",
-        fontSize: size * 0.42,
-        fontWeight: 700,
-        lineHeight: 1,
-        letterSpacing: "-0.02em",
-        fontFamily: "inherit",
+        // Keeps the mark visible against both the light and dark Cloudscape themes.
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.14)",
       }}
     >
-      {initials(shortName)}
+      <svg
+        width={size - inset * 2}
+        height={size - inset * 2}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="#ffffff"
+        strokeWidth={GLYPH_STROKE_WIDTH}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d={glyph} />
+      </svg>
     </span>
   );
 }

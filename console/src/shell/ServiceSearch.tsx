@@ -52,6 +52,7 @@ export function ServiceSearch() {
         }
       }}
       options={options}
+      renderHighlightedAriaLive={(option) => option.label ?? ""}
       enteredTextLabel={(entered) => `Search for "${entered}"`}
       placeholder="Search services  [Alt+S]"
       ariaLabel="Search services"

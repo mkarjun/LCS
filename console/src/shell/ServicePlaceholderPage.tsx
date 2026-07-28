@@ -14,6 +14,7 @@ import { findByPath } from "@services/catalog";
 import { useBreadcrumbs } from "./BreadcrumbContext";
 import { NotFoundPage } from "./NotFoundPage";
 import { recordVisit } from "./recentlyVisited";
+import { ServiceIcon } from "./ServiceIcon";
 
 /**
  * Landing page for an emulated service that does not yet have a console surface.
@@ -47,7 +48,10 @@ export default function ServicePlaceholderPage() {
     <ContentLayout
       header={
         <Header variant="h1" description={entry.description}>
-          {entry.name}
+          <SpaceBetween size="s" direction="horizontal" alignItems="center">
+            <ServiceIcon entry={entry} size={32} />
+            <span>{entry.name}</span>
+          </SpaceBetween>
         </Header>
       }
     >

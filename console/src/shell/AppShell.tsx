@@ -15,6 +15,7 @@ import { useNotifications } from "./NotificationContext";
 import { RegionAccountModal } from "./RegionAccountModal";
 import { ServiceSearch } from "./ServiceSearch";
 import { useActiveServiceNav } from "./ServiceNavContext";
+import { ServiceIcon } from "./ServiceIcon";
 
 export function AppShell() {
   const navigate = useNavigate();
@@ -35,7 +36,13 @@ export function AppShell() {
       defaultExpanded: false,
       items: group.services.map((entry) => ({
         type: "link" as const,
-        text: entry.shortName,
+        // SideNavigation renders text only, so the icon is composed into the label.
+        text: (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <ServiceIcon entry={entry} size={18} />
+            {entry.shortName}
+          </span>
+        ) as unknown as string,
         href: `/${servicePath(entry)}`,
       })),
     }));

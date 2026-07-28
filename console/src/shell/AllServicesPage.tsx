@@ -77,7 +77,7 @@ export function AllServicesPage() {
                   <div key={entry.id}>
                     <SpaceBetween size="xxs">
                       <SpaceBetween size="xs" direction="horizontal">
-                        <ServiceIcon category={entry.category} shortName={entry.shortName} size={20} />
+                        <ServiceIcon entry={entry} size={20} />
                         <Link
                           fontSize="body-m"
                           href={`/${servicePath(entry)}`}

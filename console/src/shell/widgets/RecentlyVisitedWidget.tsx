@@ -7,6 +7,7 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 
 import { findByPath, servicePath } from "@services/catalog";
 import { RECENTLY_VISITED_EVENT, readRecentlyVisited } from "../recentlyVisited";
+import { ServiceIcon } from "../ServiceIcon";
 
 export function RecentlyVisitedWidget() {
   const navigate = useNavigate();
@@ -42,15 +43,18 @@ export function RecentlyVisitedWidget() {
       <ColumnLayout columns={2} borders="horizontal">
         {entries.map((entry) => (
           <div key={entry.id}>
-            <Link
-              href={`/${servicePath(entry)}`}
-              onFollow={(event) => {
-                event.preventDefault();
-                navigate(`/${servicePath(entry)}`);
-              }}
-            >
-              {entry.shortName}
-            </Link>
+            <SpaceBetween size="xs" direction="horizontal">
+              <ServiceIcon entry={entry} size={18} />
+              <Link
+                href={`/${servicePath(entry)}`}
+                onFollow={(event) => {
+                  event.preventDefault();
+                  navigate(`/${servicePath(entry)}`);
+                }}
+              >
+                {entry.shortName}
+              </Link>
+            </SpaceBetween>
           </div>
         ))}
       </ColumnLayout>

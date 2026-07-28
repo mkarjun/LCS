@@ -56,6 +56,38 @@ export default function Ec2Routes() {
           { type: "link", text: "Network Interfaces", href: "/ec2/network-interfaces" },
         ],
       },
+      {
+        type: "section",
+        text: "Load Balancing",
+        defaultExpanded: true,
+        items: [
+          { type: "link", text: "Load Balancers", href: "/ec2/load-balancers" },
+          { type: "link", text: "Target Groups", href: "/ec2/target-groups" },
+          { type: "link", text: "Listeners", href: "/ec2/listeners" },
+        ],
+      },
+      {
+        type: "section",
+        text: "Auto Scaling",
+        defaultExpanded: true,
+        items: [
+          { type: "link", text: "Auto Scaling Groups", href: "/ec2/auto-scaling-groups" },
+          { type: "link", text: "Launch Configurations", href: "/ec2/launch-configurations" },
+        ],
+      },
+      {
+        // AWS puts these in a separate VPC console. LCS keeps them here because VPC has
+        // no console surface of its own and the EC2 nav is where users look for them.
+        type: "section",
+        text: "Virtual Private Cloud",
+        defaultExpanded: true,
+        items: [
+          { type: "link", text: "Your VPCs", href: "/ec2/vpcs" },
+          { type: "link", text: "Subnets", href: "/ec2/subnets" },
+          { type: "link", text: "Route Tables", href: "/ec2/route-tables" },
+          { type: "link", text: "Internet Gateways", href: "/ec2/internet-gateways" },
+        ],
+      },
     ],
   });
 

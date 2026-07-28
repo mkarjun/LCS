@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-auto-scaling": "^3.1096.0",
     "@aws-sdk/client-ec2": "^3.1096.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.1096.0",
     "@aws-sdk/client-iam": "^3.1096.0",
     "@aws-sdk/client-s3": "^3.699.0",
     "@cloudscape-design/board-components": "^3.0.210",
