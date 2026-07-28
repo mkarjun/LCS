@@ -1,5 +1,23 @@
 # EC2 and Adjacent Domain Coverage
 
+> **STALE — re-probe before relying on this.** This table was produced against the
+> pre-merge fork (52 services). The upstream merge brought the fork to **70 services** and
+> added **CloudTrail, Cloud Map (servicediscovery), Elastic Beanstalk, and WAF v2**, all of
+> which are listed below as unsupported. They are now supported.
+>
+> The detection method below is also obsolete. It classified "not emulated" by the
+> `NoSuchBucket` fallthrough, and upstream's `fix(core): stop unknown-service REST requests
+> falling through to S3` replaced that with `UnknownOperationException`. Verified after the
+> merge: `efs describe-file-systems` now returns
+> `UnknownOperationException: Unknown operation: GET /2015-02-01/file-systems`.
+>
+> Two lessons that cost real time here, worth keeping:
+> 1. **Probe with write-then-read, never a single read.** A read returning an error may
+>    mean "not configured" rather than "not implemented" — that mistake made every S3
+>    bucket-config API look missing when all were fully implemented.
+> 2. **Client-side validation can mask the API.** A probe using a fake instance id never
+>    reaches the emulator, so it proves nothing.
+
 Answers: "does LCS provide everything in the EC2 / networking / storage / security /
 operations domain?"
 
