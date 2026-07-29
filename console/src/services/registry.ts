@@ -25,6 +25,7 @@ export const IMPLEMENTED_SERVICES: Record<string, LazyExoticComponent<ComponentT
   cloudwatch: lazy(() => import("./cloudwatch/CloudWatchRoutes")),
   "cloudwatch-logs": lazy(() => import("./cloudwatch/CloudWatchRoutes")),
   dynamodb: lazy(() => import("./dynamodb/DynamoDbRoutes")),
+  sqs: lazy(() => import("./sqs/SqsRoutes")),
 };
 
 export function isImplemented(entry: CatalogEntry): boolean {
