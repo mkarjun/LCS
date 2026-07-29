@@ -19,6 +19,7 @@ export const IMPLEMENTED_SERVICES: Record<string, LazyExoticComponent<ComponentT
   s3: lazy(() => import("./s3/S3Routes")),
   ec2: lazy(() => import("./ec2/Ec2Routes")),
   iam: lazy(() => import("./iam/IamRoutes")),
+  lambda: lazy(() => import("./lambda/LambdaRoutes")),
 };
 
 export function isImplemented(entry: CatalogEntry): boolean {
