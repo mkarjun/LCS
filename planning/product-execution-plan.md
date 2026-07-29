@@ -759,10 +759,146 @@ recorded here so the pass has a concrete checklist.
 - Log group `creationTime` renders as "—"; DescribeLogGroups does not return it here.
 - No Logs Insights, no metric graphing, no alarm creation.
 
+### RDS (from the maintainer's AWS screenshots of "Aurora and RDS")
+
+Everything below is **greyed in the console**, not omitted — see the
+`unavailableNavItem` / `unavailableCell` helpers. Each greyed control carries a tooltip
+naming the missing API, so the rail and the tables keep the shape of the AWS console.
+
+Nav entries greyed (the API each one needs):
+- `Query editor` — the RDS Data API is a separate service in this emulator
+- `Performance insights` — no performance metrics are collected
+- `Snapshots` — `DescribeDBSnapshots` is a wire-accurate empty stub; `CreateDBSnapshot`
+  is not implemented, so the list can never be non-empty
+- `Exports in Amazon S3` — `StartExportTask`
+- `Automated backups` — `DescribeDBInstanceAutomatedBackups`
+- `Reserved instances` — no billing model
+- `Proxies` — `DescribeDBProxies` is another empty stub; `CreateDBProxy` is missing
+- `Option groups` — `CreateOptionGroup`
+- `Custom engine versions` — `CreateCustomDBEngineVersion`
+- `Zero-ETL integrations` — `CreateIntegration`
+- `Events` / `Event subscriptions` — `DescribeEvents`, `CreateEventSubscription`
+- `Recommendations` — `DescribeDBRecommendations`
+- `Certificate update` — `DescribeCertificates`
+
+Databases table columns greyed: `Upgrade rollout order`, `Recommendations`, `CPU`,
+`Current activity`, `Maintenance`. The last four need CloudWatch metrics and
+`DescribePendingMaintenanceActions`, none of which RDS publishes here.
+
+Create database — AWS sections **not built**, and why:
+- **Templates** (Production / Dev-Test) — presets over fields that already exist; no API.
+- **Cluster scalability type** (Aurora serverless / Limitless / Provisioned) and **Type of
+  provisioned configuration** — LCS models neither Aurora serverless nor instance families.
+- **Cluster storage configuration** (Aurora I/O-Optimized vs Standard) — a pricing choice.
+- **Compute resource** (connect to an EC2 instance) — no such wiring.
+- **Network type** (IPv4 / dual-stack) — the emulator is IPv4 only.
+- **Certificate authority** — `DescribeCertificates` is missing.
+- **RDS Data API toggle** — `EnableHttpEndpoint` is not honoured on create.
+- **Read replica write forwarding**, **Babelfish** — no backend.
+- **Monitoring** (Database Insights, Performance Insights, retention, KMS key) — no metrics.
+- **Create new VPC security group** inline — the picker only lists existing groups.
+- Engine tiles for Aurora MySQL, Aurora PostgreSQL, Oracle, SQL Server, and IBM Db2 are
+  **shown disabled**: LCS has container images only for PostgreSQL, MySQL, and MariaDB.
+- `Create database` splits into Express configuration / Full configuration / Restore from
+  S3 as AWS does; only Full configuration is enabled.
+
+Other RDS gaps:
+- **Modify covers three fields.** `ModifyDBInstance` here honours only
+  `MasterUserPassword`, `EnableIAMDatabaseAuthentication`, `DBSubnetGroupName`, and
+  `VpcSecurityGroupIds`. Allocated storage and instance class are accepted and silently
+  ignored, so they are not offered — verified by write-then-read (`--allocated-storage 30`
+  read back as 20).
+- **Parameter groups list only what has been written to them.** The editor works — the
+  `Parameters.Parameter.N` request encoding is now parsed (see the wire-format fixes below)
+  and values read back through `DescribeDBParameters`, verified from the browser. But LCS
+  stores no engine defaults, so a new group starts empty where AWS shows the engine's full
+  parameter set with defaults, and there is no "modified only" filter or reset-to-default.
+- **Cluster modify** is not offered at all: `ModifyDBCluster` takes only the master
+  password and the IAM auth flag.
+- `DescribeDBInstances` omits `InstanceCreateTime`, `BackupRetentionPeriod`,
+  `StorageEncrypted`, and `DeletionProtection`, so those fields have no detail-page rows.
+- AWS's `Monitoring` and `Logs & events` instance tabs are not built — no metrics, no
+  database log files.
+
+### CloudFormation (from the maintainer's AWS screenshots)
+
+Nav entries greyed (the API each one needs):
+- `Stack refactors` — `CreateStackRefactor`
+- `Infrastructure Composer` — a console-only visual template builder
+- `IaC generator` — no resource-scanning API
+- `Hooks overview` / `Invocation summary` / `Hooks` — the Hooks APIs
+- Registry section: `Public extensions` / `Activated extensions` / `Publisher`
+- `Spotlight` — a console feature with no API behind it
+
+Stacks page:
+- **Description column greyed.** `DescribeStacks` returns no stack description. The `Stack`
+  model has no description field either; adding one means parsing it out of the template
+  at create time.
+- **View nested toggle disabled.** `DescribeStacks` returns no `ParentId`, so there is
+  nothing to filter nested stacks by.
+- `Stack actions` menu is present with every entry disabled: `Detect drift`
+  (`DetectStackDrift` missing), `Import resources into stack` (no resource import), and
+  `Edit stack policy` (`SetStackPolicy` is accepted but never enforced).
+- `Create stack` splits into AWS's two options; `With existing resources (import
+  resources)` is disabled.
+- Filter status is client-side over the loaded stacks, not the `ListStacks`
+  `StackStatusFilter` parameter.
+
+Create stack:
+- **Amazon S3 URL works** — `CreateStack` honours `TemplateURL`, verified end to end
+  against a template served from an LCS bucket. `Sync from Git` is disabled.
+- Build-from-Infrastructure-Composer is omitted rather than greyed: it is a whole
+  console-only application, not a field.
+- AWS's wizard steps 3 and 4 (Configure stack options, Review and create) are not built:
+  rollback configuration, notification ARNs, stack policy, timeout, and the review screen
+  have no emulator equivalent.
+
+Other CloudFormation gaps:
+- **Change sets have no diff.** `DescribeChangeSet` returns an empty `Changes` list by
+  design, so the stack's Change sets tab lists sets and their status with no per-resource
+  preview, and there is no create/execute change set flow.
+- `ListChangeSets` summaries carry no `CreationTime`, so that column reads "—".
+- Stack outputs carry no `Description`, so that column reads "—" too.
+- No drift detection, so AWS's drift status column and Drifts tab are absent.
+- No `ListImports`, so Exports has no "stacks that import this export" drill-down.
+- StackSets: create takes a name, description, and template only. AWS's permission models,
+  deployment targets, and rollout options have no equivalent here, and the instance and
+  operation views are not built.
+- Template tab is a read-only textarea, not AWS's editor with the JSON/YAML toggle.
+
+### Emulator wire-format bugs found by building these consoles
+
+The console talks to LCS with the AWS SDK for JavaScript, which is stricter than botocore.
+Three defects were invisible to the AWS CLI and the compatibility suite:
+
+1. **`DescribeDBClusters` emitted `<DBClusterMembers><member>`.** The RDS model names that
+   list's member `DBClusterMember`. botocore falls back to `member`, so the CLI parsed it;
+   the JS SDK dropped every entry and every cluster looked empty. **Fixed.**
+2. **`DescribeDBParameters` / `DescribeDBClusterParameters` emitted `<Parameters><member>`**
+   where the member is named `Parameter`. Same class of bug. **Fixed.**
+3. **`ModifyDBParameterGroup` read `Parameters.member.N.ParameterName`** but every AWS SDK
+   sends `Parameters.Parameter.N.ParameterName`, so no parameter set over the wire was ever
+   stored. **Fixed** — `parseParameterList` now accepts both spellings.
+
+Also fixed: **`DescribeStacks` never returned the stack's `Parameters`.** Two causes, both
+needed: `stackToXml` never wrote the element, and `Stack.parameters` was never populated —
+the values lived only on the change set that applied them. The console's Parameters tab
+was empty for every stack. Neptune and DocumentDB have the same `DBClusterMember` defect
+and are handed off separately.
+
+Lesson to add to the list: **probe with the same SDK the console uses.** The AWS CLI is a
+more forgiving parser than the JS SDK, so "the CLI shows it" is not evidence the wire
+format is right.
+
 ### Cross-cutting
 - No delete/edit actions on most detail pages.
-- No tag editing anywhere (tags are read-only).
+- No tag editing anywhere (tags are read-only) — RDS create is the one place tags can be
+  set, and only at creation time.
 - No Playwright E2E coverage for any console flow.
+- **Greying vs omitting.** RDS and CloudFormation grey out AWS entries LCS cannot back;
+  the six services built before them (S3, EC2, IAM, Lambda, DynamoDB, SQS, SNS,
+  CloudWatch) omit them instead. Those eight should be revisited to use
+  `unavailableNavItem` so the whole console is consistent.
 
 ---
 
@@ -772,14 +908,17 @@ Everything below is what a new session needs to continue without re-deriving any
 
 ## Current state
 
-- Branch: `chore/upstream-merge`. All work committed, clean tree.
-- Console coverage: **8 of 70 services** have real surfaces —
-  S3, EC2, IAM, Lambda, CloudWatch, DynamoDB, SQS, SNS.
-  The other 62 are reachable via honest placeholder pages.
-- Remaining to finish the 10 core: **RDS**, then **CloudFormation** (CloudFormation last
-  on purpose — it provisions the others, so its stack views only make sense once they exist).
+- Branch: `claude/lcs-console-core-services-d38217`.
+- Console coverage: **all 10 core services** have real surfaces —
+  S3, EC2, IAM, Lambda, CloudWatch, DynamoDB, SQS, SNS, **RDS**, **CloudFormation**.
+  The other 60 are reachable via honest placeholder pages.
+- The 10-service mark is reached, so the deliverables above are now due: README, the
+  attribution note, and a **full** compatibility-suite run before any push.
+- Next per the agreed strategy: the **100% pass** over these 10, working from the
+  completeness backlog above, before starting the next 10.
 - Upstream merged: 457 commits, 52 -> 70 services. Node compatibility suite passed
-  433/433. **The other five suites (Python, AWS CLI, Go, Rust, Java) have not been run.**
+  433/433. **The other five suites (Python, AWS CLI, Go, Rust, Java) have not been run,
+  and none has been re-run since the four emulator fixes recorded in the backlog.**
 
 ## Start the environment
 
@@ -794,6 +933,11 @@ dies at startup.
 
 Console dev server: `cd console && npm run dev`, then http://localhost:5173/_lcs/ui/
 Production console (served by LCS itself): http://localhost:4566/_lcs/ui/
+
+If 5173 is taken, pass a different port — `npm run dev -- --port 5180 --strictPort` — and
+confirm which server answered before judging a page: another worktree's dev server on the
+same port will happily serve its own, older build. `vite.config.ts` hardcodes 5173, so the
+CLI flag is the only override.
 
 ## Hard-won lessons — do not relearn these
 
@@ -813,6 +957,17 @@ Production console (served by LCS itself): http://localhost:4566/_lcs/ui/
    the em dashes in these docs.
 7. **Verify the container is actually running** (`docker ps`) before trusting any curl
    result against it.
+8. **The AWS CLI is a more forgiving parser than the AWS SDK for JavaScript.** botocore
+   falls back to the Query protocol's generic `member` element when a list shape declares
+   its own member name; the JS SDK does not, and silently returns an empty list. Three RDS
+   wire-format bugs were invisible to the CLI and the compatibility suite and only showed
+   up in the console. Probe with the SDK the console actually uses.
+9. **A dev server may already hold port 5173.** Another worktree's `npm run dev` will
+   answer, serve *its* build, and make new pages look unbuilt. Check what is listening
+   before concluding a module did not register.
+10. **`useServiceNav` must not JSON round-trip its argument.** Item labels can be React
+    elements (greyed nav entries, service icons); `JSON.stringify` strips `$$typeof` and
+    React then throws on the parsed object. The hook keys off `title` + `href` instead.
 
 ## Per-service build recipe
 
@@ -826,8 +981,15 @@ cleanest references.
 5. `npx tsc --noEmit`, then verify in the browser against real seeded data.
 6. Commit with what was verified and what was deliberately omitted.
 
-**Only surface operations that are verified to work.** AWS nav entries the emulator cannot
-back are omitted rather than rendered as links that always error.
+**Only surface operations that are verified to work — but show the gap.** An AWS nav entry
+or column the emulator cannot back is rendered **greyed and inert**, never as a link that
+always errors and never silently dropped. Use `unavailableNavItem` from
+`console/src/shell/navUnavailable.tsx` for nav entries and the per-service
+`unavailableCell` pattern for table columns; both carry a tooltip naming the missing API.
+Every greyed control gets a matching line in the completeness backlog above.
+
+Greying is the rule as of RDS and CloudFormation. The eight services built before them
+still omit, and are listed in the backlog's Cross-cutting section for the 100% pass.
 
 ## Architecture invariants
 

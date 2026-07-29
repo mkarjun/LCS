@@ -15,6 +15,7 @@ import { useNotifications } from "./NotificationContext";
 import { RegionAccountModal } from "./RegionAccountModal";
 import { ServiceSearch } from "./ServiceSearch";
 import { useActiveServiceNav } from "./ServiceNavContext";
+import { UNAVAILABLE_HREF } from "./navUnavailable";
 import { ServiceIcon } from "./ServiceIcon";
 
 export function AppShell() {
@@ -121,6 +122,10 @@ export function AppShell() {
                 return;
               }
               event.preventDefault();
+              // Greyed-out entries for AWS pages LCS cannot back are inert.
+              if (event.detail.href.startsWith(UNAVAILABLE_HREF)) {
+                return;
+              }
               navigate(event.detail.href);
             }}
           />

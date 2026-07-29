@@ -27,6 +27,8 @@ export const IMPLEMENTED_SERVICES: Record<string, LazyExoticComponent<ComponentT
   dynamodb: lazy(() => import("./dynamodb/DynamoDbRoutes")),
   sqs: lazy(() => import("./sqs/SqsRoutes")),
   sns: lazy(() => import("./sns/SnsRoutes")),
+  rds: lazy(() => import("./rds/RdsRoutes")),
+  cloudformation: lazy(() => import("./cloudformation/CloudFormationRoutes")),
 };
 
 export function isImplemented(entry: CatalogEntry): boolean {
