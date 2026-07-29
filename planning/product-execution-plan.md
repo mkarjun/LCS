@@ -699,3 +699,42 @@ Parallel, independent of console work:
 - [Micro Frontends: When They Make Sense and When They Don't](https://lukasniessen.medium.com/micro-frontends-when-they-make-sense-and-when-they-dont-a1a06b726065)
 - [Should Your Team Be Using Micro Frontends and Module Federation?](https://www.bitovi.com/blog/should-your-team-be-using-micro-frontends-and-module-federation)
 - [Solving micro-frontend challenges with Module Federation (LogRocket)](https://blog.logrocket.com/solving-micro-frontend-challenges-module-federation/)
+
+## Completeness backlog (deferred to the 100% pass)
+
+Strategy agreed with the maintainer: take all 10 core services to ~70-80% first, then a
+dedicated pass to bring those 10 to 100%, then start the next 10. Gaps found so far,
+recorded here so the pass has a concrete checklist.
+
+### Lambda
+- **Code tab** — AWS's first and default tab, not built at all. Biggest single gap.
+- Tab order wrong: AWS is Code, Test, Monitor, Configuration, Aliases, Versions.
+- Function overview panel (Diagram/Template, Add trigger, Add destination).
+- Throttle / Copy ARN / Actions buttons.
+- Configuration sub-navigation: AWS has 15 entries, ours is one flat panel.
+- Monitor: AWS shows a metrics grid with a time-range selector.
+
+### EC2
+- **No create actions on resource pages.** Key Pairs, Load Balancers, Target Groups,
+  Volumes, Security Groups, Elastic IPs, VPCs, Subnets all list correctly but offer no
+  way to create — the pages are read-only. Instances is the only one with a create flow.
+- No Connect page (EC2 Instance Connect / Session Manager / SSH client tabs).
+- No Actions submenus (Instance settings, Networking, Security, Image and templates).
+- No inline Name editing, no security group rule detail pages.
+
+### S3
+- No Metrics or Management tabs.
+- Upload is text-only; no binary or multipart.
+
+### IAM
+- No create flows for roles, groups, or policies (users only).
+- No policy document viewer on the Policies page.
+
+### CloudWatch
+- Log group `creationTime` renders as "—"; DescribeLogGroups does not return it here.
+- No Logs Insights, no metric graphing, no alarm creation.
+
+### Cross-cutting
+- No delete/edit actions on most detail pages.
+- No tag editing anywhere (tags are read-only).
+- No Playwright E2E coverage for any console flow.
