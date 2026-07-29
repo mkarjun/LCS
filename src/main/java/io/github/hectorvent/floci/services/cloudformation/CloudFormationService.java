@@ -225,6 +225,12 @@ public class CloudFormationService {
 
         stack.setStatus(isCreate ? "CREATE_IN_PROGRESS" : "UPDATE_IN_PROGRESS");
         stack.setLastUpdatedTime(now());
+        // The parameters a stack was created or updated with live on the change set that
+        // applied them. Copy them onto the stack so DescribeStacks can report them, which
+        // is what AWS returns and what the console's Parameters view reads.
+        if (cs.getParameters() != null) {
+            stack.setParameters(new LinkedHashMap<>(cs.getParameters()));
+        }
         addEvent(stack, stack.getStackName(), stack.getStackId(),
                 "AWS::CloudFormation::Stack", isCreate ? "CREATE_IN_PROGRESS" : "UPDATE_IN_PROGRESS", null);
         persistStack(stack);

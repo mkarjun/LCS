@@ -566,6 +566,26 @@ class RdsQueryHandlerTest {
         verify(service).modifyDbParameterGroup("pg1", java.util.Map.of("max_connections", "200"));
     }
 
+    /**
+     * ParametersList's member is named Parameter, so this — not {@code Parameters.member.N}
+     * — is what the AWS CLI and every AWS SDK actually send. Only the generic spelling was
+     * parsed, so no parameter set over the wire was ever stored.
+     */
+    @Test
+    void modifyDbParameterGroup_readsSdkParameterEncoding() {
+        DbParameterGroup group = new DbParameterGroup("pg1", "postgres15", "test group");
+        when(service.modifyDbParameterGroup(eq("pg1"), eq(java.util.Map.of("max_connections", "200"))))
+                .thenReturn(group);
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBParameterGroupName", "pg1");
+        p.add("Parameters.Parameter.1.ParameterName", "max_connections");
+        p.add("Parameters.Parameter.1.ParameterValue", "200");
+        handler.handle("ModifyDBParameterGroup", p);
+
+        verify(service).modifyDbParameterGroup("pg1", java.util.Map.of("max_connections", "200"));
+    }
+
     @Test
     void describeDbParameters_requiresParameterGroupName() {
         Response response = handler.handle("DescribeDBParameters", params());
@@ -641,6 +661,22 @@ class RdsQueryHandlerTest {
         p.add("Parameters.member.1.ParameterName", "log_statement");
         p.add("Parameters.member.1.ParameterValue", "all");
         p.add("Parameters.member.2.ParameterName", "ignored_without_value");
+        handler.handle("ModifyDBClusterParameterGroup", p);
+
+        verify(service).modifyDbClusterParameterGroup("cpg1", java.util.Map.of("log_statement", "all"));
+    }
+
+    /** The SDK encoding, as in {@link #modifyDbParameterGroup_readsSdkParameterEncoding}. */
+    @Test
+    void modifyDbClusterParameterGroup_readsSdkParameterEncoding() {
+        DbClusterParameterGroup group = new DbClusterParameterGroup("cpg1", "aurora-postgresql16", "test group");
+        when(service.modifyDbClusterParameterGroup(eq("cpg1"), eq(java.util.Map.of("log_statement", "all"))))
+                .thenReturn(group);
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBClusterParameterGroupName", "cpg1");
+        p.add("Parameters.Parameter.1.ParameterName", "log_statement");
+        p.add("Parameters.Parameter.1.ParameterValue", "all");
         handler.handle("ModifyDBClusterParameterGroup", p);
 
         verify(service).modifyDbClusterParameterGroup("cpg1", java.util.Map.of("log_statement", "all"));

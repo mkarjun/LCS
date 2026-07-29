@@ -457,17 +457,7 @@ public class RdsQueryHandler {
         if (name == null || name.isBlank()) {
             return AwsQueryResponse.error("InvalidParameterValue", "DBParameterGroupName is required.", AwsNamespaces.RDS, 400);
         }
-        Map<String, String> parameters = new HashMap<>();
-        for (int n = 1; ; n++) {
-            String paramName = params.getFirst("Parameters.member." + n + ".ParameterName");
-            if (paramName == null) {
-                break;
-            }
-            String paramValue = params.getFirst("Parameters.member." + n + ".ParameterValue");
-            if (paramValue != null) {
-                parameters.put(paramName, paramValue);
-            }
-        }
+        Map<String, String> parameters = parseParameterList(params);
         try {
             DbParameterGroup group = service.modifyDbParameterGroup(name, parameters);
             String result = new XmlBuilder()
@@ -486,13 +476,14 @@ public class RdsQueryHandler {
         }
         try {
             DbParameterGroup group = service.getDbParameterGroup(name);
+            // ParametersList's member is named Parameter — see the DBClusterMember note.
             XmlBuilder xml = new XmlBuilder().start("Parameters");
             for (Map.Entry<String, String> entry : group.getParameters().entrySet()) {
-                xml.start("member")
+                xml.start("Parameter")
                    .elem("ParameterName", entry.getKey())
                    .elem("ParameterValue", entry.getValue())
                    .elem("IsModifiable", true)
-                   .end("member");
+                   .end("Parameter");
             }
             xml.end("Parameters").start("Marker").end("Marker");
             return Response.ok(AwsQueryResponse.envelope("DescribeDBParameters", AwsNamespaces.RDS, xml.build())).build();
@@ -552,17 +543,7 @@ public class RdsQueryHandler {
         if (name == null || name.isBlank()) {
             return AwsQueryResponse.error("InvalidParameterValue", "DBClusterParameterGroupName is required.", AwsNamespaces.RDS, 400);
         }
-        Map<String, String> parameters = new HashMap<>();
-        for (int n = 1; ; n++) {
-            String paramName = params.getFirst("Parameters.member." + n + ".ParameterName");
-            if (paramName == null) {
-                break;
-            }
-            String paramValue = params.getFirst("Parameters.member." + n + ".ParameterValue");
-            if (paramValue != null) {
-                parameters.put(paramName, paramValue);
-            }
-        }
+        Map<String, String> parameters = parseParameterList(params);
         try {
             DbClusterParameterGroup group = service.modifyDbClusterParameterGroup(name, parameters);
             String result = new XmlBuilder()
@@ -581,13 +562,14 @@ public class RdsQueryHandler {
         }
         try {
             DbClusterParameterGroup group = service.getDbClusterParameterGroup(name);
+            // ParametersList's member is named Parameter — see the DBClusterMember note.
             XmlBuilder xml = new XmlBuilder().start("Parameters");
             for (Map.Entry<String, String> entry : group.getParameters().entrySet()) {
-                xml.start("member")
+                xml.start("Parameter")
                    .elem("ParameterName", entry.getKey())
                    .elem("ParameterValue", entry.getValue())
                    .elem("IsModifiable", true)
-                   .end("member");
+                   .end("Parameter");
             }
             xml.end("Parameters").start("Marker").end("Marker");
             return Response.ok(AwsQueryResponse.envelope("DescribeDBClusterParameters", AwsNamespaces.RDS, xml.build())).build();
@@ -796,10 +778,14 @@ public class RdsQueryHandler {
            .start("DBClusterMembers");
         if (c.getDbClusterMembers() != null) {
             for (String memberId : c.getDbClusterMembers()) {
-                xml.start("member")
+                // DBClusterMemberList's member is named DBClusterMember, not the Query
+                // protocol's default "member". botocore falls back to "member" and so the
+                // AWS CLI parsed the old wrapper, but strict clients — the AWS SDK for
+                // JavaScript among them — dropped every entry and saw an empty cluster.
+                xml.start("DBClusterMember")
                    .elem("DBInstanceIdentifier", memberId)
                    .elem("IsClusterWriter", true)
-                   .end("member");
+                   .end("DBClusterMember");
             }
         }
         xml.end("DBClusterMembers");
@@ -919,6 +905,30 @@ public class RdsQueryHandler {
             }
         }
         return null;
+    }
+
+    /**
+     * Reads a ModifyDB*ParameterGroup parameter list.
+     *
+     * ParametersList's member is named Parameter, so the AWS SDKs and CLI send
+     * {@code Parameters.Parameter.N.ParameterName}. The generic {@code Parameters.member.N}
+     * form is accepted too, for hand-rolled clients that use the Query protocol default.
+     */
+    private static Map<String, String> parseParameterList(MultivaluedMap<String, String> params) {
+        Map<String, String> parameters = new HashMap<>();
+        for (String prefix : List.of("Parameters.Parameter.", "Parameters.member.")) {
+            for (int n = 1; ; n++) {
+                String paramName = params.getFirst(prefix + n + ".ParameterName");
+                if (paramName == null) {
+                    break;
+                }
+                String paramValue = params.getFirst(prefix + n + ".ParameterValue");
+                if (paramValue != null) {
+                    parameters.put(paramName, paramValue);
+                }
+            }
+        }
+        return parameters;
     }
 
     private static List<String> memberList(MultivaluedMap<String, String> params, String baseName) {

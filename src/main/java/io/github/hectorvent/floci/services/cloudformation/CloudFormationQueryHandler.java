@@ -515,6 +515,10 @@ public class CloudFormationQueryHandler {
             xml.elem("member", cap);
         }
         xml.end("Capabilities");
+        // The parameters a stack was created or updated with. They are stored on the stack
+        // and used for template resolution, but were never written to DescribeStacks, so
+        // every client — the console's Parameters view included — saw an empty list.
+        appendParameters(xml, s.getParameters());
         xml.start("Outputs");
         s.getOutputs().forEach((k, v) -> {
             xml.start("member")
