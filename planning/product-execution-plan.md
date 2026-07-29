@@ -730,6 +730,20 @@ recorded here so the pass has a concrete checklist.
 - No create flows for roles, groups, or policies (users only).
 - No policy document viewer on the Policies page.
 
+### DynamoDB (from the maintainer's AWS screenshots)
+- **Table detail tabs are wrong.** AWS uses Settings, Indexes, Monitor, Global tables,
+  Backups, Exports and streams, Permissions. Ours uses Overview, Explore items, Tags.
+- **Explore items is a separate page**, not a tab: it has a Scan/Query builder with table
+  and index selection, attribute projection, optional filters, and Run/Reset - reached
+  from an "Explore table items" button on the table page.
+- Table detail is missing a left mini-panel listing tables for quick switching.
+- Tables list is missing columns: Indexes, Replication Regions, Deletion protection,
+  Favorite, Read/Write capacity mode split, Table class.
+- Missing sections on the Settings tab: Read/write capacity, Auto scaling activities,
+  Warm throughput, Deletion protection, TTL, Encryption.
+- Missing nav entries AWS has: PartiQL editor, Backups, Exports to S3, Imports from S3,
+  Integrations, Settings.
+
 ### CloudWatch
 - Log group `creationTime` renders as "—"; DescribeLogGroups does not return it here.
 - No Logs Insights, no metric graphing, no alarm creation.
