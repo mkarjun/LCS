@@ -629,6 +629,37 @@ been unverifiable in dev.
 
 ### Next
 
+### Deliverables due at the 10-service mark
+
+Maintainer will push to a new LCS repo once the 10 core services are done. Required then:
+
+- **README** covering how to run LCS: `docker run` with the Docker socket (needed for
+  Lambda, RDS, ECS, EC2), the `_lcs/ui` console URL, AWS CLI/SDK endpoint setup, and the
+  `FLOCI_TLS_ENABLED` / `NODE_TLS_REJECT_UNAUTHORIZED` pair the TLS tests need.
+- **Attribution tone:** state plainly that LCS builds on the Floci codebase, but do not
+  lead with it or structure the README around it. LCS is becoming its own product —
+  console, and later its own logic and MicroVM work — not a Floci skin. The MIT licence
+  requires the copyright notice be preserved (it is, in NOTICE and
+  LICENSES/UPSTREAM-FLOCI-MIT.txt); it does not require prominence.
+- **Full compatibility suite** run before the push, not just the Node subset.
+
+### Lambda polish still outstanding
+
+From the maintainer's AWS screenshots, the Lambda console is missing:
+
+- **Code tab** — AWS's first and default tab; not built at all
+- Tab order: AWS is Code, Test, Monitor, Configuration, Aliases, Versions; ours starts at
+  Configuration
+- Function overview panel (Diagram/Template toggle, Add trigger, Add destination)
+- Throttle / Copy ARN / Actions buttons
+- Configuration sub-navigation — AWS has 15 entries; ours is a single flat panel
+- Monitor: AWS shows a metrics grid with a time-range selector, ours shows raw log text
+
+Not buildable here (no backend): X-Ray traces, Infrastructure Composer, MicroVMs,
+Application Signals.
+
+---
+
 The skeleton is complete, so remaining console work is per-service depth ("flesh"):
 replacing each `ServicePlaceholderPage` with a real AWS-replica surface.
 

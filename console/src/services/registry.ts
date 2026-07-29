@@ -20,6 +20,10 @@ export const IMPLEMENTED_SERVICES: Record<string, LazyExoticComponent<ComponentT
   ec2: lazy(() => import("./ec2/Ec2Routes")),
   iam: lazy(() => import("./iam/IamRoutes")),
   lambda: lazy(() => import("./lambda/LambdaRoutes")),
+  // AWS presents Logs and Metrics as one CloudWatch console, so both catalog entries
+  // (`logs` and `monitoring`) resolve to the same module.
+  cloudwatch: lazy(() => import("./cloudwatch/CloudWatchRoutes")),
+  "cloudwatch-logs": lazy(() => import("./cloudwatch/CloudWatchRoutes")),
 };
 
 export function isImplemented(entry: CatalogEntry): boolean {
