@@ -24,6 +24,7 @@ export const IMPLEMENTED_SERVICES: Record<string, LazyExoticComponent<ComponentT
   // (`logs` and `monitoring`) resolve to the same module.
   cloudwatch: lazy(() => import("./cloudwatch/CloudWatchRoutes")),
   "cloudwatch-logs": lazy(() => import("./cloudwatch/CloudWatchRoutes")),
+  dynamodb: lazy(() => import("./dynamodb/DynamoDbRoutes")),
 };
 
 export function isImplemented(entry: CatalogEntry): boolean {
