@@ -741,8 +741,19 @@ recorded here so the pass has a concrete checklist.
   Favorite, Read/Write capacity mode split, Table class.
 - Missing sections on the Settings tab: Read/write capacity, Auto scaling activities,
   Warm throughput, Deletion protection, TTL, Encryption.
-- Missing nav entries AWS has: PartiQL editor, Backups, Exports to S3, Imports from S3,
-  Integrations, Settings.
+- Missing nav entries AWS has. **Probed 2026-07-29 — my earlier "no backend" claim was
+  wrong for several of these:**
+  - `PartiQL editor` — **SUPPORTED** (`ExecuteStatement` works). Buildable now.
+  - `Exports to S3` — **SUPPORTED** (`ListExports` works). Buildable now.
+  - Point-in-time recovery — **SUPPORTED** (`DescribeContinuousBackups`).
+  - Time to Live — **SUPPORTED** (`DescribeTimeToLive`).
+  - Kinesis streaming destination — **SUPPORTED**.
+  - `Backups` — not supported (`ListBackups`).
+  - `Imports from S3` — not supported (`ListImports`).
+  - `Global tables` — not supported (`ListGlobalTables`).
+
+  Lesson repeated: assuming "no backend" without probing understates what is buildable.
+  The Settings tab can carry real PITR and TTL sections, and PartiQL deserves a page.
 
 ### CloudWatch
 - Log group `creationTime` renders as "—"; DescribeLogGroups does not return it here.
@@ -752,3 +763,78 @@ recorded here so the pass has a concrete checklist.
 - No delete/edit actions on most detail pages.
 - No tag editing anywhere (tags are read-only).
 - No Playwright E2E coverage for any console flow.
+
+---
+
+# RESUME HERE (start of a fresh session)
+
+Everything below is what a new session needs to continue without re-deriving anything.
+
+## Current state
+
+- Branch: `chore/upstream-merge`. All work committed, clean tree.
+- Console coverage: **8 of 70 services** have real surfaces —
+  S3, EC2, IAM, Lambda, CloudWatch, DynamoDB, SQS, SNS.
+  The other 62 are reachable via honest placeholder pages.
+- Remaining to finish the 10 core: **RDS**, then **CloudFormation** (CloudFormation last
+  on purpose — it provisions the others, so its stack views only make sense once they exist).
+- Upstream merged: 457 commits, 52 -> 70 services. Node compatibility suite passed
+  433/433. **The other five suites (Python, AWS CLI, Go, Rust, Java) have not been run.**
+
+## Start the environment
+
+```bash
+docker run -d --name lcs -p 4566:4566   -e FLOCI_TLS_ENABLED=true   -v //var/run/docker.sock:/var/run/docker.sock -u root   lcs/lcs:merged
+```
+
+Both flags matter. The Docker socket is required for Lambda, RDS, ECS and EC2 —
+without it Lambda invocations fail with an opaque socket error. On Windows Git Bash the
+socket path must be written `//var/run/docker.sock` or MSYS rewrites it and the container
+dies at startup.
+
+Console dev server: `cd console && npm run dev`, then http://localhost:5173/_lcs/ui/
+Production console (served by LCS itself): http://localhost:4566/_lcs/ui/
+
+## Hard-won lessons — do not relearn these
+
+1. **Probe APIs with write-then-read, never a single read.** A read that errors may mean
+   "not configured", not "not implemented". This mistake made every S3 bucket-config API
+   look missing when all were fully implemented.
+2. **AWS CLI validates client-side.** A probe with a fake resource id never reaches the
+   emulator and proves nothing.
+3. **Git Bash mangles paths.** `/aws/lambda/x` becomes `C:/Program Files/Git/aws/lambda/x`
+   — it silently created a real log group with a mangled name. Use `MSYS_NO_PATHCONV=1`
+   for every seeding command.
+4. **Do not start a Docker build while editing console source.** It copies a half-written
+   tree and fails on `npm run build`, which looks like a real error.
+5. **Kill stale containers before verifying.** A previous container holding port 4566 made
+   a verification read the *old* image and report the wrong service count.
+6. **Python file edits on Windows need `encoding="utf-8"`** — the cp1252 default fails on
+   the em dashes in these docs.
+7. **Verify the container is actually running** (`docker ps`) before trusting any curl
+   result against it.
+
+## Per-service build recipe
+
+Each service module follows the same shape. Copy an existing one — S3 or SQS are the
+cleanest references.
+
+1. Probe the API surface with write-then-read round trips. Record what is unsupported.
+2. `console/src/services/<name>/<Name>Routes.tsx` — routes plus `useServiceNav`.
+3. List page, detail page with tabs, create/action modals.
+4. Register in `console/src/services/registry.ts`.
+5. `npx tsc --noEmit`, then verify in the browser against real seeded data.
+6. Commit with what was verified and what was deliberately omitted.
+
+**Only surface operations that are verified to work.** AWS nav entries the emulator cannot
+back are omitted rather than rendered as links that always error.
+
+## Architecture invariants
+
+- Console talks to LCS through `@aws-sdk/client-*`, exactly as the AWS console talks to AWS.
+  There is no server-side UI model.
+- Served at `/_lcs/ui/`. Never `/console/` — path-style S3 puts buckets at `/{bucket}/{key}`,
+  so a bucket named "console" would shadow it.
+- Same-origin in dev (Vite proxy) and prod (served by LCS), so **no CORS is needed**.
+- Module boundaries: a service may import from `shell/` and `platform/`, never a sibling.
+- Service icons are original pictograms, never AWS Architecture Icons (separate licence).
