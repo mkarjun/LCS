@@ -22,7 +22,7 @@ import { useNotifications } from "@shell/NotificationContext";
 import { CreateTableModal } from "./CreateTableModal";
 import { formatBytes, keySchemaSummary } from "./dynamoFormat";
 
-export default function TablesPage() {
+export default function TablesPage({ exploreMode = false }: { exploreMode?: boolean } = {}) {
   const navigate = useNavigate();
   const client = useAwsClient(DynamoDBClient);
   const { notify } = useNotifications();
@@ -35,7 +35,7 @@ export default function TablesPage() {
 
   useBreadcrumbs([
     { text: "DynamoDB", href: "/dynamodb" },
-    { text: "Tables", href: "/dynamodb" },
+    { text: exploreMode ? "Explore items" : "Tables", href: exploreMode ? "/dynamodb/explore" : "/dynamodb/tables" },
   ]);
 
   const load = useCallback(async () => {
@@ -76,7 +76,7 @@ export default function TablesPage() {
   );
 
   return (
-    <ContentLayout header={<Header variant="h1">Tables</Header>}>
+    <ContentLayout header={<Header variant="h1">{exploreMode ? "Explore items" : "Tables"}</Header>}>
       <Table
         variant="container"
         loading={loading}
@@ -108,7 +108,7 @@ export default function TablesPage() {
                 href={`/dynamodb/tables/${table.TableName}`}
                 onFollow={(event) => {
                   event.preventDefault();
-                  navigate(`/dynamodb/tables/${table.TableName}`);
+                  navigate(`/dynamodb/tables/${table.TableName}${exploreMode ? "?tab=items" : ""}`);
                 }}
               >
                 {table.TableName}
