@@ -53,6 +53,10 @@ starts the emulator. Requires Windows 10 version 2004 (build 19041) or newer, x6
 Docker Desktop is fetched from Docker Inc and verified against their code-signing
 certificate before it runs; only that step asks for administrator rights.
 
+The ten minutes that takes are not spent staring at a progress bar: the installer runs a
+slideshow beside the live step list, and by the time it finishes you know how to point the
+AWS CLI at it, where the console lives, and what survives a restart.
+
 ```powershell
 # Unattended, e.g. for provisioning
 LCS-Setup.exe /silent

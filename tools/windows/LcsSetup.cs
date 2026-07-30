@@ -1,8 +1,12 @@
 // LCS-Setup.exe - the double-clickable entry point for installing LCS on Windows.
 //
-// This is deliberately a thin bootstrapper. It extracts the two PowerShell files it
-// embeds into a temporary directory and runs lcs-install.ps1, which does the real work
-// (preflight, consent, Docker Desktop, WSL2, launcher, shortcuts, start).
+// Two things live here and nothing else: the embedded PowerShell payload, and the choice
+// between the window and the console.
+//
+// This is deliberately still a thin bootstrapper. The window under ui\ shows progress and
+// collects consent, but every decision about what an install does belongs to
+// lcs-install.ps1, which does the real work (preflight, consent, Docker Desktop, WSL2,
+// launcher, shortcuts, start).
 //
 // Keeping the logic in PowerShell rather than C# is what makes the installer maintainable:
 // everything it has to drive - winget, wsl, Get-AuthenticodeSignature, Start-Process
@@ -14,13 +18,17 @@
 // dependency step, so the LCS install lands in the right profile.
 //
 // Built by build-installer.ps1 with the .NET Framework 4 csc.exe that ships with Windows,
-// so producing it needs no SDK and running it needs no runtime install.
+// so producing it needs no SDK and running it needs no runtime install. That compiler is
+// C# 5, which is why there is no string interpolation anywhere in this installer.
 
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Forms;
+using Lcs.Setup;
 
 internal static class LcsSetup
 {
@@ -30,38 +38,31 @@ internal static class LcsSetup
     // resolves it relative to its own location.
     private static readonly string[] EmbeddedScripts = { "lcs-install.ps1", "lcs.ps1" };
 
+    [STAThread]
     private static int Main(string[] args)
     {
-        Console.Title = ProductName + " Setup";
-
         bool silent = HasFlag(args, "/silent") || HasFlag(args, "-silent") || HasFlag(args, "/s");
+        bool preview = HasFlag(args, "/preview");
         string workDir = null;
 
         try
         {
             workDir = ExtractPayload();
-            int exitCode = RunInstaller(workDir, BuildArguments(args, silent));
+            string script = Path.Combine(workDir, "lcs-install.ps1");
+            string arguments = BuildArguments(args, silent);
 
-            // 3010 is the Windows convention for "succeeded, restart required". The
-            // installer uses it when WSL2 needs a reboot, and that is not a failure.
-            if (exitCode == 3010)
+            // Unattended provisioning has no window to look at and expects a console to
+            // report to, so /silent keeps the original behaviour exactly.
+            if (silent)
             {
-                Console.WriteLine();
-                Warn("  Restart Windows to finish, then use Start Menu > " + ProductName + " > Start LCS.");
-                exitCode = 0;
+                return RunConsoleWithParentAttached(workDir, script, arguments);
             }
 
-            if (!silent) Pause();
-            return exitCode;
+            return RunWindow(script, arguments, preview);
         }
         catch (Exception ex)
         {
-            Console.WriteLine();
-            Error("  Setup could not start: " + ex.Message);
-            Console.WriteLine();
-            Console.WriteLine("  As a fallback, run the installer from a checkout of the repository:");
-            Console.WriteLine("      powershell -ExecutionPolicy Bypass -File tools\\windows\\lcs-install.ps1");
-            if (!silent) Pause();
+            ReportStartupFailure(ex, silent);
             return 1;
         }
         finally
@@ -69,6 +70,51 @@ internal static class LcsSetup
             // Best effort: the payload is two small text files in %TEMP%, and a locked
             // file here should never fail an otherwise successful install.
             TryDelete(workDir);
+        }
+    }
+
+    private static int RunWindow(string script, string arguments, bool preview)
+    {
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+
+        using (var window = new InstallerForm(script, arguments, preview))
+        {
+            Application.Run(window);
+        }
+        return 0;
+    }
+
+    private static int RunConsoleInstaller(string workDir, string script, string arguments)
+    {
+        Console.Title = ProductName + " Setup";
+        int exitCode = RunInstaller(workDir, script, arguments);
+
+        // 3010 is the Windows convention for "succeeded, restart required". The
+        // installer uses it when WSL2 needs a reboot, and that is not a failure.
+        if (exitCode == 3010)
+        {
+            Console.WriteLine();
+            Warn("  Restart Windows to finish, then use Start Menu > " + ProductName + " > Start LCS.");
+            exitCode = 0;
+        }
+
+        return exitCode;
+    }
+
+    // The exe is built as a Windows application so double-clicking it does not flash a
+    // console behind the window. That leaves /silent with nowhere to write, so it borrows
+    // the console of whatever launched it.
+    private static int RunConsoleWithParentAttached(string workDir, string script, string arguments)
+    {
+        bool attached = AttachConsole(AttachParentProcess);
+        try
+        {
+            return RunConsoleInstaller(workDir, script, arguments);
+        }
+        finally
+        {
+            if (attached) FreeConsole();
         }
     }
 
@@ -111,10 +157,8 @@ internal static class LcsSetup
         return sb.ToString();
     }
 
-    private static int RunInstaller(string workDir, string extraArguments)
+    private static int RunInstaller(string workDir, string script, string extraArguments)
     {
-        string script = Path.Combine(workDir, "lcs-install.ps1");
-
         // -ExecutionPolicy Bypass applies to this process only. It does not change the
         // machine's policy, which is why the installer never has to touch that setting.
         var psi = new ProcessStartInfo
@@ -130,6 +174,22 @@ internal static class LcsSetup
             process.WaitForExit();
             return process.ExitCode;
         }
+    }
+
+    private static void ReportStartupFailure(Exception ex, bool silent)
+    {
+        string message = "Setup could not start: " + ex.Message + "\r\n\r\n" +
+                         "As a fallback, run the installer from a checkout of the repository:\r\n" +
+                         "    powershell -ExecutionPolicy Bypass -File tools\\windows\\lcs-install.ps1";
+
+        if (silent)
+        {
+            Console.WriteLine();
+            Error("  " + message);
+            return;
+        }
+
+        MessageBox.Show(message, ProductName + " setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
     private static string ReadEmbedded(string name)
@@ -182,12 +242,6 @@ internal static class LcsSetup
         return false;
     }
 
-    private static void Pause()
-    {
-        Console.WriteLine("  Press any key to close.");
-        try { Console.ReadKey(true); } catch (InvalidOperationException) { /* stdin redirected */ }
-    }
-
     private static void Warn(string message)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
@@ -201,4 +255,12 @@ internal static class LcsSetup
         Console.WriteLine(message);
         Console.ResetColor();
     }
+
+    private const int AttachParentProcess = -1;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AttachConsole(int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FreeConsole();
 }

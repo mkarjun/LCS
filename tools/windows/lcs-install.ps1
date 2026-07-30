@@ -6,20 +6,22 @@
     Driven by LCS-Setup.exe, which embeds this script. Runnable directly for scripted
     installs.
 
-    Runs in two stages so elevation is scoped as narrowly as possible:
+    Runs in stages so elevation is scoped as narrowly as possible:
 
       All          (default, as the signed-in user) preflight, consent, then hand the
                    dependency work to an elevated child process, then install LCS itself
                    and start it.
       Dependencies (elevated) install WSL2 and Docker Desktop, and nothing else.
+      Plan         (read-only) report what an install would do, and change nothing.
 
-    Splitting them matters: if the whole installer ran elevated, $env:LOCALAPPDATA,
-    the Start Menu, and the Desktop would all resolve to the administrator's profile, and
-    the user would end up with an install and shortcuts they cannot see.
+    Splitting All and Dependencies matters: if the whole installer ran elevated,
+    $env:LOCALAPPDATA, the Start Menu, and the Desktop would all resolve to the
+    administrator's profile, and the user would end up with an install and shortcuts they
+    cannot see.
 
 .PARAMETER Stage
-    All (default) or Dependencies. Dependencies requires an elevated session and is what
-    the All stage relaunches.
+    All (default), Dependencies, or Plan. Dependencies requires an elevated session and is
+    what the All stage relaunches. Plan only probes.
 
 .PARAMETER Silent
     Skip the confirmation screen. Implies consent to install Docker Desktop and accept its
@@ -37,13 +39,30 @@
 
 .PARAMETER NoStart
     Install, but do not start LCS at the end.
+
+.PARAMETER Ui
+    Emit machine-readable progress lines (@@LCS|...) alongside the normal output, and take
+    no input. LCS-Setup.exe sets this and turns those lines into the graphical installer;
+    the human-readable output stays exactly as it is, and becomes the details view.
+
+.PARAMETER UiLog
+    File the Dependencies stage mirrors its output into, so the graphical installer can follow
+    elevated work that has no pipe back to it. The All stage passes this down to the elevated
+    child; it never writes the file itself.
+
+.PARAMETER BuildFromSource
+    Build the image from a repository checkout if it cannot be obtained any other way.
+    Takes 10-20 minutes, so -Ui never does it unless asked.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Dependencies')]
+    [ValidateSet('All', 'Dependencies', 'Plan')]
     [string]$Stage = 'All',
 
     [switch]$Silent,
+    [switch]$Ui,
+    [string]$UiLog,
+    [switch]$BuildFromSource,
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'LCS'),
     [string]$Image = 'lcs/lcs:merged',
     [switch]$SkipDependencies,
@@ -66,11 +85,85 @@ $script:DockerDesktopUrls = @{
     'arm64' = 'https://desktop.docker.com/win/main/arm64/Docker%20Desktop%20Installer.exe'
 }
 
-function Write-Step { param($m) Write-Host "==> $m" -ForegroundColor Cyan }
-function Write-Ok   { param($m) Write-Host "    $m" -ForegroundColor Green }
-function Write-Info { param($m) Write-Host "    $m" }
-function Write-Warn { param($m) Write-Host "    $m" -ForegroundColor Yellow }
-function Write-Err  { param($m) Write-Host "    $m" -ForegroundColor Red }
+# The elevated stage has no pipe back to the graphical installer: -Verb RunAs needs
+# ShellExecute to raise the UAC prompt, and that cannot hand back a redirected stream. So when
+# it is given a log it writes every line it prints into that file as well, and the front-end
+# follows it. Without this, installing Docker Desktop is five minutes of a window sitting
+# still.
+#
+# The file is written here rather than by redirecting the child's output because Windows
+# PowerShell's Tee-Object and > both write UTF-16 and wrap at the console width - either of
+# which turns a protocol line into something the reader cannot parse.
+$script:Mirror = ($Stage -eq 'Dependencies') -and $UiLog
+
+function Write-Mirror {
+    param([string]$Text)
+    if (-not $script:Mirror) { return }
+    try {
+        [IO.File]::AppendAllText($UiLog, $Text + "`r`n", (New-Object Text.UTF8Encoding($false)))
+    } catch {
+        # A locked log must never fail an install that is otherwise going fine.
+    }
+}
+
+function Write-Step { param($m) Write-Host "==> $m" -ForegroundColor Cyan; Write-Mirror "==> $m" }
+function Write-Ok   { param($m) Write-Host "    $m" -ForegroundColor Green; Write-Mirror "    $m" }
+function Write-Info { param($m) Write-Host "    $m"; Write-Mirror "    $m" }
+function Write-Warn { param($m) Write-Host "    $m" -ForegroundColor Yellow; Write-Mirror "    $m" }
+function Write-Err  { param($m) Write-Host "    $m" -ForegroundColor Red; Write-Mirror "    $m" }
+
+# Anything that would otherwise ask a question has to check this. -Ui installs have already
+# taken their answers in the graphical front-end, so a Read-Host there would hang a window
+# with no console attached to type into.
+$script:Interactive = -not ($Silent -or $Ui)
+
+# ── Progress protocol ─────────────────────────────────────────────────────────
+#
+# One line per event, pipe-delimited, on stdout among the ordinary output:
+#
+#   @@LCS|FACT|arch|x64                        a fact about this machine
+#   @@LCS|STEPS|checks:Checks|wsl:WSL2         the steps an install will work through
+#   @@LCS|PLAN|docker|Install Docker...|~600MB a thing the install will do (Plan stage)
+#   @@LCS|STEP|docker|Installing Docker        this step started
+#   @@LCS|STATUS|Downloading 218/604 MB|36     detail for the current step, percent or -1
+#   @@LCS|STEPDONE|docker|ok                   ok | skip | warn | fail
+#   @@LCS|SUMMARY|Console  http://...          a line of the closing summary
+#   @@LCS|DONE|ok|LCS is running               ok | restart | incomplete | fail
+#
+# Deliberately one-directional and line-based: the front-end is a reader of this script's
+# output, never a second implementation of its logic, so the two cannot disagree about what
+# an install does.
+function Write-Ui {
+    param([Parameter(Mandatory)][string]$Kind, [string[]]$Fields = @())
+    if (-not $Ui) { return }
+
+    # A newline would fake a second event and a pipe would fake a field, so neither
+    # survives into a message. Nothing in the text needs them.
+    $clean = @($Fields | ForEach-Object { (($_ -replace '[\r\n|]', ' ') -replace '\s+', ' ').Trim() })
+    $line = "@@LCS|$Kind|" + ($clean -join '|')
+    Write-Host $line
+    Write-Mirror $line
+}
+
+function Start-UiStep {
+    param([string]$Key, [string]$Label)
+    $script:UiStep = $Key
+    Write-Ui 'STEP' @($Key, $Label)
+}
+
+# Percent -1 means "no idea how long this takes", which the front-end shows as a moving
+# indeterminate bar rather than a lie about progress.
+function Write-UiStatus {
+    param([string]$Text, [int]$Percent = -1)
+    Write-Ui 'STATUS' @($Text, [string]$Percent)
+}
+
+function Complete-UiStep {
+    param([ValidateSet('ok', 'skip', 'warn', 'fail')][string]$State = 'ok')
+    if (-not $script:UiStep) { return }
+    Write-Ui 'STEPDONE' @($script:UiStep, $State)
+    $script:UiStep = $null
+}
 
 # ── Environment ───────────────────────────────────────────────────────────────
 
@@ -116,12 +209,16 @@ function Invoke-Native {
 
 function Test-Preflight {
     Write-Step 'Checking this machine'
+    Start-UiStep 'checks' 'Checking this machine'
 
     $os    = Get-CimInstance Win32_OperatingSystem
     $build = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuildNumber
     $arch  = Get-Architecture
 
     Write-Info "$($os.Caption) (build $build, $arch)"
+    Write-Ui 'FACT' @('os', "$($os.Caption) (build $build)")
+    Write-Ui 'FACT' @('arch', $arch)
+    Write-Ui 'FACT' @('memory', "$([math]::Round($os.TotalVisibleMemorySize / 1MB)) GB RAM")
 
     if ($arch -eq 'x86') {
         throw "32-bit Windows is not supported: Docker Desktop requires 64-bit x64 or arm64."
@@ -146,6 +243,7 @@ this installer again.
     }
 
     Write-Ok 'Supported.'
+    Complete-UiStep 'ok'
     return [pscustomobject]@{ Build = $build; Architecture = $arch }
 }
 
@@ -190,51 +288,131 @@ function Get-WslStatus {
 
 # ── Consent ───────────────────────────────────────────────────────────────────
 
-function Show-Plan {
+# The single description of what an install does, so the console prompt, the graphical
+# consent screen, and the step rail are all three the same answer to that question.
+#
+# Each item is one thing that will happen: Key is what the front-end matches a step against,
+# Text is the promise, Detail is the caveat behind it.
+function Get-InstallPlan {
     param($Machine, $Docker, $Wsl)
 
-    $needsDocker = -not $Docker.Installed
-    $needsWsl    = -not $Wsl.Version2
+    $plan = @()
+
+    if (-not $Wsl.Version2) {
+        $plan += [pscustomobject]@{
+            Key    = 'wsl'
+            Text   = 'Enable the Windows Subsystem for Linux'
+            Detail = 'wsl --install --no-distribution. Needs administrator rights, and may ask for a restart.'
+        }
+    }
+
+    if (-not $Docker.Installed) {
+        $plan += [pscustomobject]@{
+            Key    = 'docker'
+            Text   = 'Install Docker Desktop, about 600 MB, from Docker Inc'
+            Detail = "Downloaded from $($script:DockerDesktopUrls[$Machine.Architecture]) and checked against Docker Inc's code-signing certificate before it runs. Needs administrator rights. Free for personal use, education, and small business; larger organisations need a paid subscription, and installing accepts the Docker Desktop licence terms."
+        }
+    }
+
+    $plan += [pscustomobject]@{
+        Key    = 'launcher'
+        Text   = "Install the LCS launcher to $InstallDir"
+        Detail = 'Per-user, so no administrator rights, plus Start Menu and Desktop shortcuts.'
+    }
+
+    if (-not $NoStart) {
+        $plan += [pscustomobject]@{
+            Key    = 'start'
+            Text   = 'Start LCS, listening on 127.0.0.1:4566'
+            Detail = 'Local only: LCS accepts any credentials and has no authentication, so it is not published to your network.'
+        }
+    }
+
+    return $plan
+}
+
+# The steps the front-end draws down the side. Ordered the way the install runs them, which
+# is not the order of the plan: dependencies come first, and the image after the launcher.
+function Get-InstallSteps {
+    param($Docker, $Wsl)
+
+    $steps = @([pscustomobject]@{ Key = 'checks'; Label = 'Checks' })
+    if ((-not $Wsl.Version2) -or (-not $Docker.Installed)) {
+        $steps += [pscustomobject]@{ Key = 'elevate'; Label = 'Permission' }
+    }
+    if (-not $Wsl.Version2)    { $steps += [pscustomobject]@{ Key = 'wsl';    Label = 'WSL2' } }
+    if (-not $Docker.Installed){ $steps += [pscustomobject]@{ Key = 'docker'; Label = 'Docker Desktop' } }
+    $steps += [pscustomobject]@{ Key = 'daemon';   Label = 'Docker engine' }
+    $steps += [pscustomobject]@{ Key = 'launcher'; Label = 'Launcher' }
+    $steps += [pscustomobject]@{ Key = 'image';    Label = 'Emulator image' }
+    if (-not $NoStart) { $steps += [pscustomobject]@{ Key = 'start'; Label = 'First start' } }
+    return $steps
+}
+
+function Write-PlanText {
+    param($Plan)
 
     Write-Host ''
     Write-Host '  This installer will:' -ForegroundColor White
     Write-Host ''
-
-    if ($needsWsl) {
-        Write-Host '   * Enable the Windows Subsystem for Linux (wsl --install --no-distribution).'
-        Write-Host '     Needs administrator rights, and may require a restart.' -ForegroundColor DarkGray
+    foreach ($item in $Plan) {
+        Write-Host "   * $($item.Text)."
+        Write-Host "     $($item.Detail)" -ForegroundColor DarkGray
     }
-    if ($needsDocker) {
-        Write-Host '   * Install Docker Desktop, downloaded from Docker Inc:'
-        Write-Host "       $($script:DockerDesktopUrls[$Machine.Architecture])" -ForegroundColor DarkGray
-        Write-Host '     The download is verified against Docker Inc''s code-signing certificate'
-        Write-Host '     before it runs. Needs administrator rights.' -ForegroundColor DarkGray
-        Write-Host '     Docker Desktop is free for personal use, education, and small business;'
-        Write-Host '     larger organisations need a paid subscription. Installing accepts its'
-        Write-Host '     licence terms: https://docs.docker.com/subscription/desktop-license/' -ForegroundColor DarkGray
-    }
-    if (-not $needsDocker -and -not $needsWsl) {
-        Write-Host '   * Nothing: Docker is already installed.'
-    }
-
-    Write-Host "   * Install the LCS launcher to $InstallDir (no admin rights needed)."
-    Write-Host '   * Add Start Menu and Desktop shortcuts.'
-    Write-Host "   * Start LCS, listening on 127.0.0.1:4566 only."
     Write-Host ''
     Write-Host '  It will not change any other system setting, and installs nothing else.' -ForegroundColor DarkGray
     Write-Host ''
+}
 
-    if ($Silent) { return $true }
+function Show-Plan {
+    param($Plan)
+
+    Write-PlanText $Plan
+    if (-not $script:Interactive) { return $true }
 
     Write-Host '  Continue? [Y/n] ' -NoNewline
     $answer = Read-Host
     return ([string]::IsNullOrWhiteSpace($answer) -or $answer.Trim().ToLower().StartsWith('y'))
 }
 
+# Read-only: probes the machine and reports what an install would do. The graphical
+# installer runs this before it draws its first screen, so the consent it collects is for
+# the work this script would actually perform on this machine.
+function Invoke-PlanStage {
+    $machine = Test-Preflight
+    $docker  = Get-DockerStatus
+    $wsl     = Get-WslStatus
+
+    Write-Ui 'FACT' @('docker', $(if ($docker.DaemonRunning) { "running, $($docker.Version)" } elseif ($docker.Installed) { 'installed, not running' } else { 'not installed' }))
+    Write-Ui 'FACT' @('wsl',    $(if ($wsl.Version2) { 'enabled' } else { 'not enabled' }))
+    Write-Ui 'FACT' @('image',  $Image)
+
+    # Offered rather than assumed: a checkout means the image can be built, but 10-20
+    # minutes is not something to start without being asked.
+    $checkout = Find-SourceCheckout
+    if ($checkout) { Write-Ui 'FACT' @('checkout', $checkout) }
+
+    $steps = Get-InstallSteps -Docker $docker -Wsl $wsl
+    Write-Ui 'STEPS' @($steps | ForEach-Object { "$($_.Key):$($_.Label)" })
+
+    $plan = Get-InstallPlan -Machine $machine -Docker $docker -Wsl $wsl
+    foreach ($item in $plan) {
+        Write-Ui 'PLAN' @($item.Key, $item.Text, $item.Detail)
+    }
+
+    # Printed, not asked: this stage changes nothing, so there is nothing here to consent to.
+    if (-not $Ui) { Write-PlanText $plan }
+
+    Write-Ui 'DONE' @('ok', 'Plan complete.')
+    return 0
+}
+
 # ── Dependency stage (elevated) ───────────────────────────────────────────────
 
 function Install-Wsl {
     Write-Step 'Enabling Windows Subsystem for Linux'
+    Start-UiStep 'wsl' 'Enabling the Windows Subsystem for Linux'
+    Write-UiStatus 'Installing the WSL2 kernel and platform features'
 
     # --no-distribution keeps this to the kernel and platform features. Docker Desktop
     # creates its own distro; installing Ubuntu here would be an unrequested extra.
@@ -243,26 +421,84 @@ function Install-Wsl {
         Write-Warn "wsl --install exited $($result.ExitCode):"
         Write-Warn $result.Output
         Write-Warn 'Continuing: Docker Desktop can enable WSL2 itself, and will say so if it cannot.'
+        Complete-UiStep 'warn'
         return $false
     }
 
     Write-Ok 'WSL2 enabled.'
     if ($result.Output -match 'restart|reboot') {
         Write-Warn 'Windows wants a restart to finish enabling WSL2.'
+        Complete-UiStep 'warn'
         return $true
     }
+    Complete-UiStep 'ok'
     return $false
+}
+
+# Downloads to a file while reporting how far along it is.
+#
+# Invoke-WebRequest is the obvious call and the wrong one here: it reports nothing this
+# script can forward to a progress bar, and on Windows PowerShell its own progress rendering
+# costs more than the transfer on a 600 MB file.
+function Save-HttpFile {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$OutFile,
+        [string]$Activity = 'Downloading'
+    )
+
+    # Explicit TLS 1.2 so this works on hosts whose default is still older.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    $request = [Net.HttpWebRequest]::Create($Uri)
+    $request.UserAgent = 'lcs-installer'
+    $response = $null
+    $stream   = $null
+    $output   = $null
+
+    try {
+        $response = $request.GetResponse()
+        $total    = $response.ContentLength
+        $stream   = $response.GetResponseStream()
+        $output   = [IO.File]::Create($OutFile)
+
+        $buffer     = New-Object byte[] 131072
+        $read       = 0
+        $done       = [long]0
+        $lastReport = -1
+
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $output.Write($buffer, 0, $read)
+            $done += $read
+
+            if ($total -le 0) { continue }
+            $percent = [int](100 * $done / $total)
+            if ($percent -eq $lastReport) { continue }
+
+            $lastReport = $percent
+            $mb = { param($b) [int]($b / 1MB) }
+            Write-UiStatus "$Activity - $(& $mb $done) of $(& $mb $total) MB" $percent
+        }
+    } finally {
+        if ($output)   { $output.Dispose() }
+        if ($stream)   { $stream.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
 }
 
 function Install-DockerDesktop {
     param([string]$Architecture)
 
     Write-Step 'Installing Docker Desktop'
+    Start-UiStep 'docker' 'Installing Docker Desktop'
 
     # winget is preferred: it resolves the current version and verifies the package hash
     # and signature itself, so there is no URL or checksum here to go stale.
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Info 'Using winget.'
+        # winget reports its progress by redrawing a console line, which is not something
+        # this script can turn into events, so this half of the step is honestly unknowable.
+        Write-UiStatus 'Downloading and installing through winget - about 600 MB'
         $wingetArgs = @(
             'install', '--id', 'Docker.DockerDesktop', '--exact',
             '--accept-package-agreements', '--accept-source-agreements',
@@ -271,6 +507,7 @@ function Install-DockerDesktop {
         $result = Invoke-Native winget $wingetArgs
         if ($result.ExitCode -eq 0) {
             Write-Ok 'Docker Desktop installed via winget.'
+            Complete-UiStep 'ok'
             return
         }
         Write-Warn "winget exited $($result.ExitCode); falling back to a direct download."
@@ -285,24 +522,26 @@ function Install-DockerDesktop {
     Write-Info "Downloading $url"
     Write-Info 'This is roughly 600 MB and takes a few minutes.'
     try {
-        # Explicit TLS 1.2 so this works on hosts whose default is still older.
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+        Save-HttpFile -Uri $url -OutFile $target -Activity 'Downloading Docker Desktop'
     } catch {
         throw "Could not download Docker Desktop: $($_.Exception.Message)"
     }
 
+    Write-UiStatus 'Checking the download is signed by Docker Inc'
     Assert-SignedByDocker -Path $target
 
     Write-Info 'Running the Docker Desktop installer (silent).'
+    Write-UiStatus 'Running the Docker Desktop installer - a few minutes'
     $result = Invoke-Native $target @('install', '--quiet', '--accept-license')
     if ($result.ExitCode -notin @(0, 3010)) {
+        Complete-UiStep 'fail'
         throw "Docker Desktop installer exited $($result.ExitCode):`n$($result.Output)"
     }
 
     Remove-Item $target -Force -ErrorAction SilentlyContinue
     Write-Ok 'Docker Desktop installed.'
     if ($result.ExitCode -eq 3010) { Write-Warn 'The installer asked for a restart.' }
+    Complete-UiStep 'ok'
 }
 
 # Refuses to run a downloaded binary unless Windows says Docker Inc signed it.
@@ -343,12 +582,16 @@ function Invoke-DependencyStage {
         $restart = Install-Wsl
     } else {
         Write-Ok 'WSL2 already enabled.'
+        Start-UiStep 'wsl' 'WSL2'
+        Complete-UiStep 'skip'
     }
 
     if (-not $docker.Installed) {
         Install-DockerDesktop -Architecture $machine.Architecture
     } else {
         Write-Ok 'Docker already installed.'
+        Start-UiStep 'docker' 'Docker Desktop'
+        Complete-UiStep 'skip'
     }
 
     if ($restart) { return 3010 }
@@ -369,24 +612,33 @@ function Start-DockerDesktop {
 
 function Wait-DockerDaemon {
     Write-Step 'Waiting for the Docker daemon'
+    Start-UiStep 'daemon' 'Starting the Docker engine'
     Start-DockerDesktop | Out-Null
 
-    $deadline = (Get-Date).AddSeconds($DaemonTimeoutSeconds)
+    $started   = Get-Date
+    $deadline  = $started.AddSeconds($DaemonTimeoutSeconds)
     $announced = $false
 
     while ((Get-Date) -lt $deadline) {
         $docker = Get-DockerStatus
         if ($docker.DaemonRunning) {
             Write-Ok "Docker daemon $($docker.Version) is up."
+            Complete-UiStep 'ok'
             return
         }
         if (-not $announced) {
             Write-Info 'Docker Desktop takes 30-90 seconds to start the first time.'
             $announced = $true
         }
+
+        # Waiting on somebody else's startup has no real percentage, but 90 seconds is what
+        # a first start costs, so that is the scale the bar is drawn against.
+        $elapsed = [int]((Get-Date) - $started).TotalSeconds
+        Write-UiStatus "Waiting for Docker Desktop - ${elapsed}s of the 30-90s a first start takes" ([Math]::Min(95, [int](100 * $elapsed / 90)))
         Start-Sleep -Seconds 3
     }
 
+    Complete-UiStep 'fail'
     throw @"
 The Docker daemon did not start within ${DaemonTimeoutSeconds}s.
 
@@ -401,6 +653,8 @@ works. Restart, let Docker Desktop finish starting, then run:
 
 function Install-Launcher {
     Write-Step "Installing the launcher to $InstallDir"
+    Start-UiStep 'launcher' 'Installing the launcher and shortcuts'
+    Write-UiStatus "Writing to $InstallDir"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
     # LCS-Setup.exe extracts its embedded copies next to this script; a direct run uses the
@@ -455,6 +709,7 @@ function New-Shortcuts {
     $desktop = [Environment]::GetFolderPath('DesktopDirectory')
     New-Shortcut (Join-Path $desktop 'Start LCS.lnk') $target '-Action Up'
     Write-Ok 'Desktop > Start LCS'
+    Complete-UiStep 'ok'
 }
 
 function New-Shortcut {
@@ -477,16 +732,21 @@ function New-Shortcut {
 # a machine that had never seen the image.
 function Install-Image {
     Write-Step "Checking for the $Image image"
+    Start-UiStep 'image' 'Getting the emulator image'
+    Write-UiStatus "Looking for $Image"
 
     if ((Invoke-Native docker @('image', 'inspect', $Image)).ExitCode -eq 0) {
         Write-Ok 'Already present.'
+        Complete-UiStep 'skip'
         return $true
     }
 
-    if (Install-ImageFromArchive) { return $true }
-    if (Install-ImageFromRegistry) { return $true }
-    if (Install-ImageFromSource) { return $true }
+    if ((Install-ImageFromArchive) -or (Install-ImageFromRegistry) -or (Install-ImageFromSource)) {
+        Complete-UiStep 'ok'
+        return $true
+    }
 
+    Complete-UiStep 'fail'
     return $false
 }
 
@@ -505,6 +765,7 @@ function Install-ImageFromArchive {
 
         $size = [math]::Round((Get-Item $archive).Length / 1MB)
         Write-Info "Loading $name (${size} MB) - this takes a minute."
+        Write-UiStatus "Loading $name (${size} MB) - about a minute"
 
         # docker load detects and decompresses gzip itself, so every supported archive
         # goes through the same call and nothing is expanded to a temporary file.
@@ -532,6 +793,7 @@ function Install-ImageFromRegistry {
     }
 
     Write-Info "Trying to pull $Image."
+    Write-UiStatus "Pulling $Image"
     $pull = Invoke-Native docker @('pull', $Image)
     if ($pull.ExitCode -eq 0) {
         Write-Ok 'Image pulled.'
@@ -548,16 +810,22 @@ function Install-ImageFromSource {
     if (-not $repo) { return $false }
 
     Write-Info "Found an LCS checkout at $repo."
-    if (-not $Silent) {
+    if ($script:Interactive) {
         Write-Host '    Build the image from it now? This takes 10-20 minutes. [y/N] ' -NoNewline
         $answer = Read-Host
         if ($answer -notmatch '^(y|yes)$') { return $false }
+    } elseif ($Silent -or $BuildFromSource) {
+        Write-Info 'Building from source, as asked.'
     } else {
-        Write-Info 'Building from source (silent mode).'
+        # -Ui without -BuildFromSource: the graphical installer offers this as a checkbox on
+        # its consent screen, so silence here means the answer was no.
+        Write-Info 'Not building from source: -BuildFromSource was not given.'
+        return $false
     }
 
     Write-Step 'Building the LCS image'
     Write-Info 'Progress is shown by Docker; this is the slow part.'
+    Write-UiStatus 'Building the image from source - 10 to 20 minutes'
     & docker build -f (Join-Path $repo 'docker\Dockerfile') -t $Image $repo
     if ($LASTEXITCODE -ne 0) {
         Write-Warn 'The build failed.'
@@ -586,9 +854,15 @@ function Invoke-AllStages {
     $docker  = Get-DockerStatus
     $wsl     = Get-WslStatus
 
-    if (-not (Show-Plan -Machine $machine -Docker $docker -Wsl $wsl)) {
-        Write-Warn 'Cancelled. Nothing was changed.'
-        return 2
+    # -Ui has already shown this plan on its consent screen and been told to go ahead;
+    # printing it again would only push the log's useful part off the top.
+    if (-not $Ui) {
+        if (-not (Show-Plan (Get-InstallPlan -Machine $machine -Docker $docker -Wsl $wsl))) {
+            Write-Warn 'Cancelled. Nothing was changed.'
+            return 2
+        }
+    } else {
+        Write-Ui 'STEPS' @(Get-InstallSteps -Docker $docker -Wsl $wsl | ForEach-Object { "$($_.Key):$($_.Label)" })
     }
 
     $needsDependencies = (-not $docker.Installed) -or (-not $wsl.Version2)
@@ -599,7 +873,13 @@ function Invoke-AllStages {
 
     if ($needsDependencies) {
         Write-Step 'Installing dependencies (an administrator prompt will appear)'
+        Start-UiStep 'elevate' 'Waiting for the administrator prompt'
+        Write-UiStatus 'Windows is asking permission to install WSL2 and Docker Desktop'
         $exitCode = Invoke-ElevatedDependencyStage
+        # The elevated child reported its own wsl and docker steps through the tee'd log;
+        # this closes the parent's own "waiting for permission" step, whatever came between.
+        $script:UiStep = 'elevate'
+        Complete-UiStep $(if ($exitCode -in @(0, 3010)) { 'ok' } else { 'fail' })
         if ($exitCode -eq 3010) {
             Write-Host ''
             Write-Warn 'Windows needs a restart before Docker can run.'
@@ -607,6 +887,7 @@ function Invoke-AllStages {
             # Finish the user-scoped part so the shortcuts exist after the reboot.
             Install-Launcher
             New-Shortcuts
+            Write-Ui 'DONE' @('restart', 'Restart Windows to finish installing LCS.')
             return 3010
         }
         if ($exitCode -ne 0) {
@@ -623,12 +904,29 @@ function Invoke-AllStages {
 
     # A non-zero exit is what stops a scripted install from reporting success when the
     # emulator cannot run.
-    if (-not $haveImage) { return 4 }
+    if (-not $haveImage) {
+        Write-Ui 'DONE' @('incomplete', "The launcher is installed, but the $Image image is not on this machine.")
+        return 4
+    }
 
     if (-not $NoStart) {
         Write-Step 'Starting LCS'
-        & (Join-Path $InstallDir 'lcs.cmd') -Action Up
+        Start-UiStep 'start' 'Starting LCS'
+        Write-UiStatus 'Starting the container and waiting for the console to answer'
+        # -NoBrowser because the graphical installer offers "Open console" on its last
+        # screen; opening a browser tab behind the window is not the same as being asked.
+        $startArgs = @('-Action', 'Up')
+        if ($Ui) { $startArgs += '-NoBrowser' }
+        & (Join-Path $InstallDir 'lcs.cmd') @startArgs
+        if ($LASTEXITCODE -ne 0) {
+            Complete-UiStep 'fail'
+            Write-Ui 'DONE' @('fail', 'LCS is installed, but it did not start. The details view has the reason.')
+            return 5
+        }
+        Complete-UiStep 'ok'
     }
+
+    Write-Ui 'DONE' @('ok', 'LCS is installed and running.')
     return 0
 }
 
@@ -643,9 +941,19 @@ function Invoke-ElevatedDependencyStage {
     )
     if ($Silent) { $arguments += '-Silent' }
 
+    # The child mirrors its output into this file, which is the only way the graphical
+    # installer can see the elevated half of the install. Hidden, because there is nothing in
+    # that console the window is not already showing.
+    $windowStyle = 'Normal'
+    if ($Ui) {
+        $arguments += @('-Ui')
+        if ($UiLog) { $arguments += @('-UiLog', "`"$UiLog`"") }
+        $windowStyle = 'Hidden'
+    }
+
     try {
         $process = Start-Process -FilePath (Get-Process -Id $PID).Path `
-            -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+            -ArgumentList $arguments -Verb RunAs -Wait -PassThru -WindowStyle $windowStyle
         return $process.ExitCode
     } catch {
         throw "Could not start the elevated installer: $($_.Exception.Message). Approve the administrator prompt, or install Docker Desktop yourself and re-run with -SkipDependencies."
@@ -680,6 +988,13 @@ function Show-Summary {
         Write-Host "          docker tag <registry>/lcs:<tag> $Image" -ForegroundColor DarkGray
         Write-Host '          lcs up' -ForegroundColor DarkGray
         Write-Host ''
+
+        # Two fields, label then value. Aligning with spaces would not survive Write-Ui, which
+        # collapses runs of whitespace so a message can never contain a line break.
+        Write-Ui 'SUMMARY' @('', 'Any one of these fixes it:')
+        Write-Ui 'SUMMARY' @('1', 'Put lcs-image.tar.gz next to LCS-Setup.exe and run this again.')
+        Write-Ui 'SUMMARY' @('2', "From a checkout: docker build -f docker/Dockerfile -t $Image .")
+        Write-Ui 'SUMMARY' @('3', 'From a registry: docker pull, then docker tag it as ' + $Image)
         return
     }
 
@@ -694,6 +1009,13 @@ function Show-Summary {
     Write-Host '  Bound to 127.0.0.1 only. LCS accepts any credentials and has no' -ForegroundColor DarkGray
     Write-Host '  authentication, so it is not exposed to your network by default.' -ForegroundColor DarkGray
     Write-Host ''
+
+    Write-Ui 'SUMMARY' @('Start', 'Start Menu > LCS > Start LCS')
+    # Slashes rather than the console version's pipes: a pipe is the protocol's field
+    # separator, so Write-Ui would strip it and run the four commands together.
+    Write-Ui 'SUMMARY' @('Commands', 'lcs up / lcs down / lcs status / lcs logs')
+    Write-Ui 'SUMMARY' @('Console', 'http://localhost:4566/_lcs/ui/')
+    Write-Ui 'SUMMARY' @('Endpoint', 'http://localhost:4566')
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -701,6 +1023,9 @@ function Show-Summary {
 try {
     if ($Stage -eq 'Dependencies') {
         exit (Invoke-DependencyStage)
+    }
+    if ($Stage -eq 'Plan') {
+        exit (Invoke-PlanStage)
     }
 
     Write-Host ''
@@ -713,5 +1038,9 @@ try {
     Write-Host ''
     Write-Err "Setup failed: $($_.Exception.Message)"
     Write-Host ''
+    # The front-end has no other way to know a throw happened: the process exit code arrives
+    # after the window has already decided what to show.
+    Complete-UiStep 'fail'
+    Write-Ui 'DONE' @('fail', $_.Exception.Message)
     exit 1
 }
