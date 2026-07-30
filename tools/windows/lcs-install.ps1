@@ -48,7 +48,12 @@ param(
     [string]$Image = 'lcs/lcs:merged',
     [switch]$SkipDependencies,
     [switch]$NoStart,
-    [int]$DaemonTimeoutSeconds = 240
+    [int]$DaemonTimeoutSeconds = 240,
+
+    # Where to look for lcs-image.tar[.gz]. LCS-Setup.exe extracts these scripts to a temp
+    # directory and passes its own location here, so a bundle's image archive is found
+    # beside the exe rather than beside the extracted script.
+    [string]$PayloadDir = $PSScriptRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -464,6 +469,12 @@ function New-Shortcut {
     $link.Save()
 }
 
+# Gets the LCS image by whichever route is available: already present, a tarball beside the
+# installer, a registry pull, or a build from a source checkout.
+#
+# Returns $true only if the image actually ends up on the machine. Reporting a successful
+# install when LCS cannot start is what made the first version of this installer useless on
+# a machine that had never seen the image.
 function Install-Image {
     Write-Step "Checking for the $Image image"
 
@@ -472,22 +483,102 @@ function Install-Image {
         return $true
     }
 
-    # A tarball beside the installer is how an offline install gets the image.
-    $tar = Join-Path $PSScriptRoot 'lcs-image.tar'
-    if (Test-Path $tar) {
-        Write-Info "Loading $tar - this takes a minute."
-        $load = Invoke-Native docker @('load', '-i', $tar)
-        if ($load.ExitCode -ne 0) { throw "docker load failed:`n$($load.Output)" }
-        Copy-Item $tar (Join-Path $InstallDir 'lcs-image.tar') -Force -ErrorAction SilentlyContinue
+    if (Install-ImageFromArchive) { return $true }
+    if (Install-ImageFromRegistry) { return $true }
+    if (Install-ImageFromSource) { return $true }
+
+    return $false
+}
+
+# An archive beside the installer is the offline route. .tar.gz is accepted because the
+# image is ~570 MB raw and ~330 MB compressed, and that difference decides whether it fits
+# in whatever the user is using to move it.
+function Install-ImageFromArchive {
+    # PayloadDir is where a bundle keeps the archive; PSScriptRoot covers running this
+    # script straight out of a checkout. Deduplicated so a direct run does not scan twice.
+    $searchDirs = @($PayloadDir, $PSScriptRoot) | Where-Object { $_ } | Select-Object -Unique
+
+    foreach ($dir in $searchDirs) {
+    foreach ($name in @('lcs-image.tar', 'lcs-image.tar.gz', 'lcs-image.tgz')) {
+        $archive = Join-Path $dir $name
+        if (-not (Test-Path $archive)) { continue }
+
+        $size = [math]::Round((Get-Item $archive).Length / 1MB)
+        Write-Info "Loading $name (${size} MB) - this takes a minute."
+
+        # docker load detects and decompresses gzip itself, so every supported archive
+        # goes through the same call and nothing is expanded to a temporary file.
+        $load = Invoke-Native docker @('load', '-i', $archive)
+
+        if ($load.ExitCode -ne 0) {
+            Write-Warn "Loading $name failed: $($load.Output)"
+            continue
+        }
+
+        # Kept beside the launcher so it can be reloaded after a `docker image prune`.
+        Copy-Item $archive (Join-Path $InstallDir $name) -Force -ErrorAction SilentlyContinue
         Write-Ok 'Image loaded.'
         return $true
     }
-
-    Write-Warn "Image '$Image' is not present, and no lcs-image.tar beside this installer."
-    Write-Warn 'Build it from a checkout of the LCS repository:'
-    Write-Warn "    docker build -f docker/Dockerfile -t $Image ."
-    Write-Warn 'Everything else is installed; LCS will start once the image exists.'
+    }
     return $false
+}
+
+# Only attempted for a namespaced reference. `lcs/lcs:merged` is a local build tag that
+# exists on no registry, so pulling it would spend a minute to fail confusingly.
+function Install-ImageFromRegistry {
+    if ($Image -notmatch '[./]' -or $Image -like 'lcs/lcs:*') {
+        return $false
+    }
+
+    Write-Info "Trying to pull $Image."
+    $pull = Invoke-Native docker @('pull', $Image)
+    if ($pull.ExitCode -eq 0) {
+        Write-Ok 'Image pulled.'
+        return $true
+    }
+    Write-Warn 'Pull failed; the image is not on a registry this machine can reach.'
+    return $false
+}
+
+# Building takes 10-20 minutes, so it is offered rather than assumed - but on a developer's
+# machine with a checkout it is the difference between a working install and a dead end.
+function Install-ImageFromSource {
+    $repo = Find-SourceCheckout
+    if (-not $repo) { return $false }
+
+    Write-Info "Found an LCS checkout at $repo."
+    if (-not $Silent) {
+        Write-Host '    Build the image from it now? This takes 10-20 minutes. [y/N] ' -NoNewline
+        $answer = Read-Host
+        if ($answer -notmatch '^(y|yes)$') { return $false }
+    } else {
+        Write-Info 'Building from source (silent mode).'
+    }
+
+    Write-Step 'Building the LCS image'
+    Write-Info 'Progress is shown by Docker; this is the slow part.'
+    & docker build -f (Join-Path $repo 'docker\Dockerfile') -t $Image $repo
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn 'The build failed.'
+        return $false
+    }
+    Write-Ok 'Image built.'
+    return $true
+}
+
+# Walks up from the installer looking for the repository root, so running the script from
+# tools\windows inside a checkout just works.
+function Find-SourceCheckout {
+    $candidate = $PSScriptRoot
+    for ($depth = 0; $depth -lt 5 -and $candidate; $depth++) {
+        if ((Test-Path (Join-Path $candidate 'docker\Dockerfile')) -and
+            (Test-Path (Join-Path $candidate 'pom.xml'))) {
+            return $candidate
+        }
+        $candidate = Split-Path -Parent $candidate
+    }
+    return $null
 }
 
 function Invoke-AllStages {
@@ -530,7 +621,11 @@ function Invoke-AllStages {
 
     Show-Summary -HaveImage $haveImage
 
-    if ($haveImage -and -not $NoStart) {
+    # A non-zero exit is what stops a scripted install from reporting success when the
+    # emulator cannot run.
+    if (-not $haveImage) { return 4 }
+
+    if (-not $NoStart) {
         Write-Step 'Starting LCS'
         & (Join-Path $InstallDir 'lcs.cmd') -Action Up
     }
@@ -561,6 +656,33 @@ function Show-Summary {
     param([bool]$HaveImage)
 
     Write-Host ''
+
+    # Without the image nothing can run, so this is a failure with a launcher installed -
+    # not a success with a caveat. Saying "Installed." here sent someone away with a
+    # shortcut that does nothing.
+    if (-not $HaveImage) {
+        Write-Host '  Not finished - LCS cannot start yet.' -ForegroundColor Red
+        Write-Host ''
+        Write-Host "  The launcher is installed at $InstallDir, but the emulator image"
+        Write-Host "  '$Image' is not on this machine and could not be obtained."
+        Write-Host ''
+        Write-Host '  Any one of these fixes it:' -ForegroundColor White
+        Write-Host ''
+        Write-Host '   1. Get lcs-image.tar.gz from whoever gave you this installer, put it'
+        Write-Host '      in the same folder as LCS-Setup.exe, and run the installer again.'
+        Write-Host ''
+        Write-Host '   2. If you have a checkout of the LCS repository:'
+        Write-Host "          docker build -f docker/Dockerfile -t $Image ." -ForegroundColor DarkGray
+        Write-Host '          lcs up' -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host '   3. If the image is on a registry you can reach:'
+        Write-Host '          docker pull <registry>/lcs:<tag>' -ForegroundColor DarkGray
+        Write-Host "          docker tag <registry>/lcs:<tag> $Image" -ForegroundColor DarkGray
+        Write-Host '          lcs up' -ForegroundColor DarkGray
+        Write-Host ''
+        return
+    }
+
     Write-Host '  Installed.' -ForegroundColor Green
     Write-Host ''
     Write-Host '  Start        Start Menu > LCS > Start LCS'
@@ -571,10 +693,6 @@ function Show-Summary {
     Write-Host ''
     Write-Host '  Bound to 127.0.0.1 only. LCS accepts any credentials and has no' -ForegroundColor DarkGray
     Write-Host '  authentication, so it is not exposed to your network by default.' -ForegroundColor DarkGray
-    if (-not $HaveImage) {
-        Write-Host ''
-        Write-Warn 'The LCS image is still missing - see the note above.'
-    }
     Write-Host ''
 }
 

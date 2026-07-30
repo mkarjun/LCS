@@ -84,14 +84,6 @@ internal static class LcsSetup
             File.WriteAllText(Path.Combine(workDir, name), ReadEmbedded(name), new UTF8Encoding(false));
         }
 
-        // An image tarball sitting beside the exe is how an offline install supplies the
-        // LCS image; the installer looks for it next to the script it is running from.
-        string tar = Path.Combine(AppDirectory(), "lcs-image.tar");
-        if (File.Exists(tar))
-        {
-            File.Copy(tar, Path.Combine(workDir, "lcs-image.tar"));
-        }
-
         return workDir;
     }
 
@@ -101,6 +93,11 @@ internal static class LcsSetup
     {
         var sb = new StringBuilder();
         if (silent) sb.Append(" -Silent");
+
+        // The scripts run from a temp directory, so the installer would otherwise look for
+        // the image archive there. Point it at the exe's own folder instead: that is where
+        // a bundle puts lcs-image.tar.gz, and passing the path beats copying ~330 MB.
+        sb.Append(" -PayloadDir \"").Append(AppDirectory()).Append('"');
 
         foreach (string arg in args)
         {

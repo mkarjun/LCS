@@ -132,25 +132,33 @@ function Assert-ImagePresent {
     if ((Invoke-Docker image inspect $Image).ExitCode -eq 0) { return }
 
     Write-Warn "Image '$Image' is not present locally."
-    # A tarball beside this script is how the installer ships the image offline.
-    $tar = Join-Path $PSScriptRoot 'lcs-image.tar'
-    if (Test-Path $tar) {
-        Write-Step "Loading image from $tar (this takes a minute)"
-        $load = Invoke-Docker load -i $tar
-        if ($load.ExitCode -ne 0) { throw "docker load failed for ${tar}:`n$($load.Output)" }
+
+    # An archive beside this script is how the installer keeps an offline copy, so a
+    # `docker image prune` does not leave the machine unable to start.
+    foreach ($name in @('lcs-image.tar', 'lcs-image.tar.gz', 'lcs-image.tgz')) {
+        $archive = Join-Path $PSScriptRoot $name
+        if (-not (Test-Path $archive)) { continue }
+
+        Write-Step "Loading image from $name (this takes a minute)"
+        # docker load detects and decompresses gzip itself, so .tar and .tar.gz are the
+        # same call and nothing is expanded to a temporary file.
+        $load = Invoke-Docker load -i $archive
+        if ($load.ExitCode -ne 0) { throw "docker load failed for ${archive}:`n$($load.Output)" }
         return
     }
 
     throw @"
-Image '$Image' not found, and no lcs-image.tar next to this script.
+Image '$Image' not found, and no lcs-image.tar/.tar.gz next to this script.
 
-Build it from a checkout of the LCS repository:
+Any one of these fixes it:
 
-    docker build -f docker/Dockerfile -t $Image .
+  1. Put lcs-image.tar.gz next to this script and run it again.
 
-Or export it from a machine that already has it:
+  2. From a checkout of the LCS repository:
+         docker build -f docker/Dockerfile -t $Image .
 
-    docker save $Image -o lcs-image.tar
+  3. Export it from a machine that already has it:
+         docker save $Image | gzip > lcs-image.tar.gz
 "@
 }
 
