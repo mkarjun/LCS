@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+#
+# lcs - start, stop, and inspect the LCS emulator container.
+#
+# The Linux twin of tools/windows/lcs.ps1. Same container flags, same defaults, same
+# output, so switching between the two is uneventful.
+#
+#   lcs              start, wait until ready, open the console
+#   lcs up
+#   lcs down
+#   lcs restart
+#   lcs status
+#   lcs logs
+#   lcs console      open the console in a browser
+#
+# Environment overrides:
+#   LCS_IMAGE          image to run           (default lcs/lcs:merged)
+#   LCS_CONTAINER      container name         (default lcs)
+#   LCS_PORT           host port              (default 4566)
+#   LCS_BIND           host interface         (default 127.0.0.1)
+#   LCS_DATA           bind-mount for /app/data, enabling persistence
+#   LCS_DB_PORTS       publish this range for RDS, e.g. 7000-7019
+#   LCS_TIMEOUT        seconds to wait for readiness (default 120)
+
+set -euo pipefail
+
+IMAGE="${LCS_IMAGE:-lcs/lcs:merged}"
+CONTAINER="${LCS_CONTAINER:-lcs}"
+PORT="${LCS_PORT:-4566}"
+# LCS has no authentication and accepts any credentials, so publishing it on every
+# interface would hand anyone on the network an API that can start containers here.
+BIND="${LCS_BIND:-127.0.0.1}"
+DATA_DIR="${LCS_DATA:-}"
+DB_PORTS="${LCS_DB_PORTS:-}"
+TIMEOUT="${LCS_TIMEOUT:-120}"
+
+CONSOLE_URL="http://localhost:${PORT}/_lcs/ui/"
+ENDPOINT_URL="http://localhost:${PORT}"
+
+if [[ -t 1 ]]; then
+    C_CYAN=$'\033[36m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+    C_RED=$'\033[31m'; C_DIM=$'\033[90m'; C_OFF=$'\033[0m'
+else
+    C_CYAN=''; C_GREEN=''; C_YELLOW=''; C_RED=''; C_DIM=''; C_OFF=''
+fi
+
+step() { printf '%s==> %s%s\n' "$C_CYAN" "$1" "$C_OFF"; }
+ok()   { printf '%s    %s%s\n' "$C_GREEN" "$1" "$C_OFF"; }
+info() { printf '    %s\n' "$1"; }
+warn() { printf '%s    %s%s\n' "$C_YELLOW" "$1" "$C_OFF"; }
+err()  { printf '%s    %s%s\n' "$C_RED" "$1" "$C_OFF" >&2; }
+die()  { err "$1"; exit 1; }
+
+require_docker() {
+    command -v docker >/dev/null 2>&1 || die \
+"Docker is not installed, or not on PATH.
+    Install it with the LCS installer, or see https://docs.docker.com/engine/install/"
+
+    # The CLI exists whether or not the daemon is up, so liveness needs its own check.
+    if ! docker info >/dev/null 2>&1; then
+        if systemctl is-enabled docker >/dev/null 2>&1; then
+            die \
+"The Docker daemon is not responding. Start it with:
+    sudo systemctl start docker"
+        fi
+        die \
+"The Docker daemon is not responding.
+    If you were just added to the 'docker' group, log out and back in for it to apply."
+    fi
+}
+
+container_state() {
+    docker inspect "$CONTAINER" --format '{{.State.Status}}' 2>/dev/null || true
+}
+
+require_image() {
+    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        return
+    fi
+
+    # A tarball beside this script is how an offline install supplies the image.
+    local tar
+    tar="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lcs-image.tar"
+    if [[ -f "$tar" ]]; then
+        step "Loading image from $tar (this takes a minute)"
+        docker load -i "$tar"
+        return
+    fi
+
+    die \
+"Image '$IMAGE' is not present, and no lcs-image.tar beside this script.
+
+    Build it from a checkout of the LCS repository:
+        docker build -f docker/Dockerfile -t $IMAGE .
+
+    Or export it from a machine that has it:
+        docker save $IMAGE -o lcs-image.tar"
+}
+
+require_port_free() {
+    # A container we own is fine - cmd_up removes it. Anything else is a real conflict, and
+    # proceeding just produces a container that exits immediately.
+    [[ -n "$(container_state)" ]] && return 0
+
+    local holder=''
+    if command -v ss >/dev/null 2>&1; then
+        holder="$(ss -ltnp "sport = :$PORT" 2>/dev/null | awk 'NR>1' || true)"
+    elif command -v lsof >/dev/null 2>&1; then
+        holder="$(lsof -iTCP:"$PORT" -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1' || true)"
+    fi
+
+    [[ -n "$holder" ]] && die \
+"Port $PORT is already in use:
+$holder
+    Stop it, or run with LCS_PORT=<other> lcs up"
+    return 0
+}
+
+open_browser() {
+    local url="$1"
+    for opener in xdg-open gio open sensible-browser; do
+        if command -v "$opener" >/dev/null 2>&1; then
+            "$opener" "$url" >/dev/null 2>&1 &
+            return
+        fi
+    done
+}
+
+wait_ready() {
+    step 'Waiting for LCS to become ready'
+    local deadline=$(( SECONDS + TIMEOUT ))
+
+    while (( SECONDS < deadline )); do
+        local state
+        state="$(container_state)"
+        if [[ "$state" != 'running' ]]; then
+            err "Container stopped while starting (state: ${state:-gone}). Last output:"
+            docker logs --tail 40 "$CONTAINER" || true
+            exit 1
+        fi
+
+        # The console is served by the same process as the API, so one 200 proves both.
+        if curl -fsS -o /dev/null --max-time 3 "$CONSOLE_URL" 2>/dev/null; then
+            ok "Ready after $(( SECONDS - (deadline - TIMEOUT) ))s."
+            return
+        fi
+        sleep 1
+    done
+
+    err "LCS did not answer on $CONSOLE_URL within ${TIMEOUT}s. Last output:"
+    docker logs --tail 40 "$CONTAINER" || true
+    exit 1
+}
+
+cmd_up() {
+    require_docker
+    require_image
+    require_port_free
+
+    local state
+    state="$(container_state)"
+
+    if [[ "$state" == 'running' ]]; then
+        ok 'LCS is already running.'
+    else
+        if [[ -n "$state" ]]; then
+            # Reusing a stopped container keeps its old image and port mapping, which is
+            # how a rebuilt image silently fails to take effect.
+            step "Removing previous container ($state)"
+            docker rm -f "$CONTAINER" >/dev/null
+        fi
+
+        local args=(
+            run -d
+            --name "$CONTAINER"
+            --restart unless-stopped
+            -p "${BIND}:${PORT}:4566"
+            # Required by the TLS-dependent paths and the compatibility suites.
+            -e FLOCI_TLS_ENABLED=true
+            # Lambda, RDS, ECS and EC2 start containers of their own; without the socket,
+            # Lambda invocations fail with an opaque socket error.
+            -v /var/run/docker.sock:/var/run/docker.sock
+            -u root
+        )
+
+        if [[ "$BIND" != '127.0.0.1' && "$BIND" != 'localhost' ]]; then
+            warn "Publishing on $BIND. LCS has no authentication and accepts any"
+            warn 'credentials, so anyone who can reach this port can drive it.'
+        fi
+
+        if [[ -n "$DB_PORTS" ]]; then
+            args+=(-p "${BIND}:${DB_PORTS}:${DB_PORTS}")
+        fi
+
+        if [[ -n "$DATA_DIR" ]]; then
+            mkdir -p "$DATA_DIR"
+            args+=(-v "$(readlink -f "$DATA_DIR"):/app/data")
+            ok "Persisting resources to $(readlink -f "$DATA_DIR")"
+        fi
+
+        args+=("$IMAGE")
+
+        step "Starting $IMAGE as '$CONTAINER' on port $PORT"
+        docker "${args[@]}" >/dev/null
+    fi
+
+    wait_ready
+
+    cat <<EOF
+
+  ${C_GREEN}LCS is up.${C_OFF}
+  Console   $CONSOLE_URL
+  Endpoint  $ENDPOINT_URL
+
+  Point the AWS CLI at it:
+      aws --endpoint-url $ENDPOINT_URL s3 ls
+
+  Any credentials work; 'test' / 'test' is conventional.
+EOF
+    [[ -z "$DATA_DIR" ]] && printf '%s  Resources are in-memory: a restart starts empty. Set LCS_DATA=<dir> to keep them.%s\n' "$C_DIM" "$C_OFF"
+    echo
+
+    [[ "${LCS_NO_BROWSER:-}" == '1' ]] || open_browser "$CONSOLE_URL"
+}
+
+cmd_down() {
+    require_docker
+    local state
+    state="$(container_state)"
+    if [[ -z "$state" ]]; then
+        ok 'LCS is not running.'
+        return
+    fi
+
+    step "Stopping and removing '$CONTAINER'"
+    docker rm -f "$CONTAINER" >/dev/null
+    ok 'Stopped.'
+    warn "Databases and other resources LCS started as their own containers are left running; 'docker ps' shows them."
+}
+
+cmd_status() {
+    require_docker
+    local state
+    state="$(container_state)"
+    if [[ -z "$state" ]]; then
+        warn 'LCS is not running. Start it with: lcs up'
+        return
+    fi
+
+    docker ps --filter "name=^${CONTAINER}$" \
+        --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}'
+    echo
+    if curl -fsS -o /dev/null --max-time 3 "$CONSOLE_URL" 2>/dev/null; then
+        ok "Console answering at $CONSOLE_URL"
+    else
+        err "Container is up but $CONSOLE_URL is not answering yet."
+    fi
+}
+
+usage() {
+    sed -n '3,25p' "$(readlink -f "${BASH_SOURCE[0]}")" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-up}" in
+    up|start)      cmd_up ;;
+    down|stop)     cmd_down ;;
+    restart)       cmd_down; cmd_up ;;
+    status)        cmd_status ;;
+    console|ui)    open_browser "$CONSOLE_URL" ;;
+    logs)          require_docker; docker logs -f "$CONTAINER" ;;
+    -h|--help|help) usage ;;
+    *)             die "Unknown command '$1'. Try: lcs --help" ;;
+esac

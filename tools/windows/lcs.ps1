@@ -18,13 +18,20 @@
           socket, Lambda invocations fail with an opaque socket error.
 
 .PARAMETER Action
-    Up (default), Down, Restart, Status, or Logs.
+    Up (default), Down, Restart, Status, Logs, or Console. Positional, so `lcs up` and
+    `lcs -Action Up` are the same command.
 
 .PARAMETER Image
     Image to run. Defaults to lcs/lcs:merged, or $env:LCS_IMAGE if set.
 
 .PARAMETER Port
     Host port for the API and console. Defaults to 4566.
+
+.PARAMETER BindAddress
+    Host interface to publish on. Defaults to 127.0.0.1 - LCS has no authentication and
+    accepts any credentials, so binding it to every interface would hand anyone on the
+    network an unauthenticated API that can start containers on this machine. Pass
+    0.0.0.0 only on a network you control and understand.
 
 .PARAMETER PublishDbPorts
     Also publish the RDS proxy port range so databases created through RDS are reachable
@@ -42,8 +49,11 @@
     Do not open the console when the container becomes healthy.
 
 .EXAMPLE
-    .\lcs.ps1
+    lcs
     Starts LCS and opens the console.
+
+.EXAMPLE
+    lcs status
 
 .EXAMPLE
     .\lcs.ps1 -Action Up -Persist "$env:LOCALAPPDATA\LCS\data" -PublishDbPorts
@@ -54,12 +64,14 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Up', 'Down', 'Restart', 'Status', 'Logs')]
+    [Parameter(Position = 0)]
+    [ValidateSet('Up', 'Down', 'Restart', 'Status', 'Logs', 'Console')]
     [string]$Action = 'Up',
 
     [string]$Image = $(if ($env:LCS_IMAGE) { $env:LCS_IMAGE } else { 'lcs/lcs:merged' }),
     [string]$ContainerName = 'lcs',
     [int]$Port = 4566,
+    [string]$BindAddress = '127.0.0.1',
     [switch]$PublishDbPorts,
     [string]$DbPortRange = '7000-7019',
     [string]$Persist,
@@ -208,14 +220,20 @@ function Start-Lcs {
         $runArgs = @(
             'run', '-d',
             '--name', $ContainerName,
-            '-p', "${Port}:4566",
+            '--restart', 'unless-stopped',
+            '-p', "${BindAddress}:${Port}:4566",
             '-e', 'FLOCI_TLS_ENABLED=true',
             '-v', '/var/run/docker.sock:/var/run/docker.sock',
             '-u', 'root'
         )
 
+        if ($BindAddress -ne '127.0.0.1' -and $BindAddress -ne 'localhost') {
+            Write-Warn "Publishing on $BindAddress. LCS has no authentication and accepts any"
+            Write-Warn "credentials, so anyone who can reach this port can drive it."
+        }
+
         if ($PublishDbPorts) {
-            $runArgs += @('-p', "${DbPortRange}:${DbPortRange}")
+            $runArgs += @('-p', "${BindAddress}:${DbPortRange}:${DbPortRange}")
             Write-Warn "Publishing $DbPortRange - this can add several seconds to startup."
         }
 
@@ -288,6 +306,9 @@ try {
         'Down'    { Stop-Lcs }
         'Restart' { Stop-Lcs; Start-Lcs }
         'Status'  { Show-Status }
+        'Console' { Start-Process $consoleUrl }
+        # Streaming logs is the one place docker should own the console, so this is a
+        # direct call rather than going through Invoke-Docker's output capture.
         'Logs'    { Assert-Docker; docker logs -f $ContainerName }
     }
 } catch {

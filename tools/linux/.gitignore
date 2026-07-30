@@ -1,0 +1,2 @@
+# Build output: .deb and .rpm packages, and the docker save tarball. Release artifacts.
+dist/

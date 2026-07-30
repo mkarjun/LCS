@@ -1,88 +1,113 @@
 # Windows launcher and installer
 
-Two things live here: a script that runs LCS, and an installer that puts that script on a
-machine with shortcuts.
+`LCS-Setup.exe` installs LCS and everything it needs. `lcs.ps1` runs it afterwards.
+
+## Layout
+
+| File | Role |
+|---|---|
+| `LcsSetup.cs` | Thin bootstrapper compiled to `LCS-Setup.exe`. Extracts the two scripts it embeds and runs the installer. |
+| `lcs-install.ps1` | The installer: preflight, consent, Docker Desktop, WSL2, launcher, shortcuts, start. |
+| `lcs.ps1` | The runtime launcher, installed as `lcs`. |
+| `build-installer.ps1` | Compiles the exe. |
+
+The logic lives in PowerShell, not C#. Everything the installer drives — `winget`, `wsl`,
+`Get-AuthenticodeSignature`, `Start-Process -Verb RunAs`, the shortcut API — is native
+there and awkward in C#. The exe exists because people expect to double-click an installer,
+and because a bare `.ps1` is blocked by the default execution policy.
+
+## Installing
+
+```powershell
+.\dist\LCS-Setup.exe             # interactive
+.\dist\LCS-Setup.exe /silent     # unattended
+```
+
+Flags: `/silent`, `/dir=<path>`, `/image=<tag>`, `/nostart`, `/skipdeps`.
+
+Requires Windows 10 version 2004 (build 19041) or newer on x64 or arm64. Below that,
+Docker Desktop's WSL2 backend does not exist and the installer stops with that reason
+rather than installing something that cannot work.
+
+### What it does
+
+1. **Preflight** — Windows build and architecture.
+2. **Consent** — one screen listing every change, including where Docker Desktop is
+   downloaded from and that installing it accepts Docker's licence terms. `/silent` skips
+   it, which is an explicit opt-in to those terms.
+3. **Dependencies**, if needed — `wsl --install --no-distribution`, then Docker Desktop via
+   `winget` (which verifies the package itself) or a direct download from
+   `desktop.docker.com`. A direct download is checked with `Get-AuthenticodeSignature` and
+   deleted unless Windows says Docker Inc signed it — TLS proves who served the bytes, not
+   who built them.
+4. **Launcher** — `lcs.ps1` and a `lcs.cmd` wrapper to `%LOCALAPPDATA%\LCS`, added to the
+   user PATH.
+5. **Shortcuts** — Start Menu and Desktop.
+6. **Start** — waits for the daemon, then runs `lcs up`.
+
+Only step 3 elevates, and it runs as a separate child process. If the whole installer ran
+elevated, `%LOCALAPPDATA%`, the Start Menu, and the Desktop would resolve to the
+administrator's profile and the user would end up with an install they cannot see.
+
+Exit code 3010 means "installed, restart required" — WSL2 sometimes needs a reboot. The
+launcher and shortcuts are installed first so they are there afterwards.
 
 ## Running LCS
 
-`lcs.ps1` is the whole lifecycle.
-
 ```powershell
-.\lcs.ps1                 # start, wait until ready, open the console
-.\lcs.ps1 -Action Status
-.\lcs.ps1 -Action Down
-.\lcs.ps1 -Action Restart
-.\lcs.ps1 -Action Logs
+lcs             # or: lcs up
+lcs status
+lcs down
+lcs restart
+lcs logs
+lcs console
 ```
 
-It always applies the two flags that matter and are easy to forget:
+`-Persist <dir>`, `-Port <n>`, `-BindAddress <ip>`, `-PublishDbPorts`, `-Image <tag>`,
+`-NoBrowser`.
+
+Two container flags are always applied and are the reason this script exists:
 
 | Flag | Why |
 |---|---|
 | `-e FLOCI_TLS_ENABLED=true` | Required by the TLS-dependent paths and the compatibility suites. |
 | `-v /var/run/docker.sock:/var/run/docker.sock` with `-u root` | Lambda, RDS, ECS, and EC2 start containers of their own. Without the socket, Lambda invocations fail with an opaque socket error. |
 
-Useful options:
+**LCS publishes on `127.0.0.1` by default.** It has no authentication and accepts any
+credentials, and the Docker socket mount means anything that can reach the port can start
+containers on the host. `-BindAddress 0.0.0.0` warns and proceeds.
 
-```powershell
-.\lcs.ps1 -Persist "$env:LOCALAPPDATA\LCS\data"   # keep resources across restarts
-.\lcs.ps1 -PublishDbPorts                          # reach RDS databases at localhost:<port>
-.\lcs.ps1 -Port 4570                               # if 4566 is taken
-.\lcs.ps1 -Image lcs/lcs:dev                       # or set $env:LCS_IMAGE
-```
-
-Without `-Persist`, everything is in-memory and a restart starts empty.
-
-`-PublishDbPorts` is off by default because publishing the range costs several seconds of
-startup on Docker Desktop, and most users never point a SQL client at a database.
-
-## Building the installer
+## Building
 
 ```powershell
 .\build-installer.ps1
 ```
 
-Produces `dist\LCS-Setup.exe`. It compiles with the .NET Framework 4 `csc.exe` that ships
-with Windows, so building needs no SDK and the result runs with no runtime install.
-`lcs.ps1` is embedded as a resource, so the exe is self-contained.
+Parses both scripts before compiling — a syntax error otherwise shows up as the installer
+window closing on someone else's machine — then compiles with the .NET Framework 4
+`csc.exe` that ships with Windows. No SDK to build, no runtime to install.
 
-`dist/` is gitignored: the exe and the image tarball are release artifacts, not source.
+`dist/` is gitignored: the exe and the image tarball are release artifacts.
 
 ### Offline installs
 
-`LCS-Setup.exe` does not bundle the LCS image — it would add hundreds of megabytes. On a
-machine that cannot reach a registry with LCS, export the image next to the exe and the
-installer will load it:
+The exe does not bundle the LCS image — that would add hundreds of megabytes. Put a
+tarball beside it and the installer loads it:
 
 ```powershell
 docker save lcs/lcs:merged -o dist\lcs-image.tar
 ```
 
-## What the installer does
-
-1. Verifies Docker is installed **and** that the daemon is responding. The CLI answers
-   `--version` with the daemon stopped, so both are checked.
-2. Writes `lcs.ps1` and a `lcs.cmd` wrapper to `%LOCALAPPDATA%\LCS`. The wrapper is what
-   sidesteps the PowerShell execution policy.
-3. Loads `lcs-image.tar` if the image is missing and the tarball is present.
-4. Creates Start Menu and Desktop shortcuts.
-5. Offers to start LCS.
-
-It needs no administrator rights, changes no system settings, and writes only to the
-install directory and the two shortcut folders.
-
-Flags: `/silent` (no prompts), `/dir=<path>`, `/image=<tag>`.
-
-Docker itself is not bundled — it is a large install with its own licensing. The installer
-links to the download instead.
-
 ## Uninstalling
 
-There is no uninstaller. Remove the three locations by hand:
+No uninstaller. Remove the four things it creates:
 
 ```powershell
+docker rm -f lcs
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\LCS"
 Remove-Item -Recurse -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\LCS"
 Remove-Item "$([Environment]::GetFolderPath('DesktopDirectory'))\Start LCS.lnk"
-docker rm -f lcs
 ```
+
+Then drop `%LOCALAPPDATA%\LCS` from your user PATH. Docker Desktop, if the installer added
+it, is uninstalled through Settings > Apps.

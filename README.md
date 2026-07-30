@@ -39,9 +39,86 @@ It gives you AWS-shaped services on your machine without requiring a cloud accou
 
 LCS stands for Local Cloud Services.
 
+## Install
+
+Installers that set up everything, including Docker if it is missing, and start LCS.
+
+### Windows
+
+Download and run **`LCS-Setup.exe`**.
+
+It checks the machine, shows exactly what it will do, then installs Docker Desktop if
+needed, puts the `lcs` command on your PATH, adds Start Menu and Desktop shortcuts, and
+starts the emulator. Requires Windows 10 version 2004 (build 19041) or newer, x64 or arm64.
+Docker Desktop is fetched from Docker Inc and verified against their code-signing
+certificate before it runs; only that step asks for administrator rights.
+
+```powershell
+# Unattended, e.g. for provisioning
+LCS-Setup.exe /silent
+```
+
+Build it from a checkout with `tools\windows\build-installer.ps1`.
+
+### Linux
+
+```bash
+./install-lcs.sh
+```
+
+Detects the distribution, installs Docker Engine from its package repository (or Docker's
+official repository as a fallback), adds you to the `docker` group, installs the `lcs`
+command and an application menu entry, and starts the emulator. Works on Debian, Ubuntu,
+Fedora, RHEL, CentOS, openSUSE, and Arch.
+
+```bash
+# Unattended
+./install-lcs.sh --yes
+```
+
+Native packages are also available. They install the same launcher but *declare* Docker as
+a dependency rather than installing it, so apt and dnf resolve and remove it normally:
+
+```bash
+sudo apt install ./lcs_0.1.0-1_all.deb
+sudo dnf install ./lcs-0.1.0-1.noarch.rpm
+```
+
+Build both with `tools/linux/build-packages.sh`.
+
+### The `lcs` command
+
+Both installers give you the same command:
+
+```bash
+lcs up          # start, wait until ready, open the console
+lcs down        # stop and remove the container
+lcs restart
+lcs status      # is it running, is the console answering
+lcs logs        # follow the emulator log
+lcs console     # open the console in a browser
+```
+
+Options are environment variables on Linux and parameters on Windows:
+
+| Setting | Linux | Windows |
+|---|---|---|
+| Keep data across restarts | `LCS_DATA=~/.lcs/data` | `-Persist "$env:LOCALAPPDATA\LCS\data"` |
+| Different port | `LCS_PORT=4570` | `-Port 4570` |
+| Reachable RDS databases | `LCS_DB_PORTS=7000-7019` | `-PublishDbPorts` |
+| Different image | `LCS_IMAGE=lcs/lcs:dev` | `-Image lcs/lcs:dev` |
+
+> **LCS listens on `127.0.0.1` only.** It has no authentication and accepts any
+> credentials, so anything that can reach the port can drive it — including starting
+> containers on the host, since the Docker socket is mounted. Override the bind address
+> (`LCS_BIND` / `-BindAddress`) only on a network you control.
+
+Without persistence enabled, resources live in memory and a restart starts empty.
+
 ## Quick Start
 
-The fastest way to run LCS is with the official [CLI](https://github.com/floci-io/floci-cli)
+Already have Docker and just want the container? The official
+[CLI](https://github.com/floci-io/floci-cli) is the shortest path:
 
 ```bash
 floci start

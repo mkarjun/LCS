@@ -1,19 +1,20 @@
-// LCS installer.
+// LCS-Setup.exe - the double-clickable entry point for installing LCS on Windows.
 //
-// Compiled to a single self-contained LCS-Setup.exe by build-installer.ps1, which embeds
-// lcs.ps1 as a resource so the exe carries everything it installs. Targets the .NET
-// Framework 4 compiler that ships with Windows, so building it needs no SDK download and
-// running it needs no runtime install.
+// This is deliberately a thin bootstrapper. It extracts the two PowerShell files it
+// embeds into a temporary directory and runs lcs-install.ps1, which does the real work
+// (preflight, consent, Docker Desktop, WSL2, launcher, shortcuts, start).
 //
-// What it does, in order:
-//   1. Verifies Docker is installed and the daemon is responding.
-//   2. Writes lcs.ps1 into the install directory.
-//   3. Makes sure the LCS image is present (loads lcs-image.tar beside the exe if not).
-//   4. Creates Start Menu and Desktop shortcuts that run the script.
-//   5. Offers to start LCS.
+// Keeping the logic in PowerShell rather than C# is what makes the installer maintainable:
+// everything it has to drive - winget, wsl, Get-AuthenticodeSignature, Start-Process
+// -Verb RunAs, the WScript.Shell shortcut API - is native there and awkward here. The exe
+// exists because people expect to double-click an installer, and because a .ps1 on its own
+// is blocked by the default execution policy.
 //
-// It never modifies system settings, never writes outside the install directory and the
-// two shortcut folders, and needs no administrator rights.
+// It runs as the signed-in user and does not elevate. lcs-install.ps1 elevates only the
+// dependency step, so the LCS install lands in the right profile.
+//
+// Built by build-installer.ps1 with the .NET Framework 4 csc.exe that ships with Windows,
+// so producing it needs no SDK and running it needs no runtime install.
 
 using System;
 using System.Diagnostics;
@@ -24,214 +25,113 @@ using System.Text;
 internal static class LcsSetup
 {
     private const string ProductName = "LCS";
-    private const string DefaultImage = "lcs/lcs:merged";
-    private const string ImageTarName = "lcs-image.tar";
-    private const string ScriptName = "lcs.ps1";
+
+    // Extracted together: lcs-install.ps1 copies lcs.ps1 to the install directory, and
+    // resolves it relative to its own location.
+    private static readonly string[] EmbeddedScripts = { "lcs-install.ps1", "lcs.ps1" };
 
     private static int Main(string[] args)
     {
-        bool silent = Array.Exists(args, a => a.Equals("/silent", StringComparison.OrdinalIgnoreCase));
-        string installDir = GetArg(args, "/dir=") ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), ProductName);
-        string image = GetArg(args, "/image=") ?? DefaultImage;
-
         Console.Title = ProductName + " Setup";
-        Header();
+
+        bool silent = HasFlag(args, "/silent") || HasFlag(args, "-silent") || HasFlag(args, "/s");
+        string workDir = null;
 
         try
         {
-            RequireDocker();
-            InstallScript(installDir);
-            EnsureImage(image, installDir);
-            CreateShortcuts(installDir);
-            Done(installDir, image);
+            workDir = ExtractPayload();
+            int exitCode = RunInstaller(workDir, BuildArguments(args, silent));
 
-            if (!silent && Ask("Start LCS now?"))
+            // 3010 is the Windows convention for "succeeded, restart required". The
+            // installer uses it when WSL2 needs a reboot, and that is not a failure.
+            if (exitCode == 3010)
             {
-                RunScript(installDir, "-Action Up");
+                Console.WriteLine();
+                Warn("  Restart Windows to finish, then use Start Menu > " + ProductName + " > Start LCS.");
+                exitCode = 0;
             }
+
+            if (!silent) Pause();
+            return exitCode;
         }
         catch (Exception ex)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine();
-            Console.WriteLine("Setup failed: " + ex.Message);
-            Console.ResetColor();
+            Error("  Setup could not start: " + ex.Message);
+            Console.WriteLine();
+            Console.WriteLine("  As a fallback, run the installer from a checkout of the repository:");
+            Console.WriteLine("      powershell -ExecutionPolicy Bypass -File tools\\windows\\lcs-install.ps1");
             if (!silent) Pause();
             return 1;
         }
-
-        if (!silent) Pause();
-        return 0;
-    }
-
-    private static void Header()
-    {
-        Console.WriteLine();
-        Console.WriteLine("  " + ProductName + " - Local Cloud Services");
-        Console.WriteLine("  An AWS-compatible emulator you run on your own machine.");
-        Console.WriteLine("  ------------------------------------------------------");
-        Console.WriteLine();
-    }
-
-    // Docker is not bundled: it is a large install with its own licensing, and silently
-    // pulling it in would be a surprise. Fail with the download link instead.
-    private static void RequireDocker()
-    {
-        Step("Checking Docker");
-
-        string version;
-        if (!TryRun("docker", "--version", out version))
+        finally
         {
-            throw new Exception(
-                "Docker is not installed, or not on PATH.\r\n" +
-                "  Install Docker Desktop from https://docs.docker.com/desktop/install/windows-install/\r\n" +
-                "  then run this installer again.");
+            // Best effort: the payload is two small text files in %TEMP%, and a locked
+            // file here should never fail an otherwise successful install.
+            TryDelete(workDir);
         }
-        Ok(version.Trim());
-
-        // The CLI answers --version even with the daemon stopped, so liveness needs its
-        // own check or every later command fails confusingly.
-        string server;
-        if (!TryRun("docker", "info --format \"{{.ServerVersion}}\"", out server))
-        {
-            throw new Exception(
-                "Docker is installed but the daemon is not responding.\r\n" +
-                "  Start Docker Desktop, wait for it to finish starting, then run this again.");
-        }
-        Ok("Docker daemon " + server.Trim());
     }
 
-    private static void InstallScript(string installDir)
+    private static string ExtractPayload()
     {
-        Step("Installing to " + installDir);
-        Directory.CreateDirectory(installDir);
+        string workDir = Path.Combine(Path.GetTempPath(), "lcs-setup-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        Directory.CreateDirectory(workDir);
 
-        string script = ReadEmbedded(ScriptName);
-        string target = Path.Combine(installDir, ScriptName);
-        File.WriteAllText(target, script, new UTF8Encoding(false));
-        Ok(ScriptName);
-
-        // A .cmd wrapper means the shortcuts and a double-click both work without anyone
-        // fighting the PowerShell execution policy.
-        string cmd = Path.Combine(installDir, "lcs.cmd");
-        File.WriteAllText(cmd,
-            "@echo off\r\n" +
-            "powershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0" + ScriptName + "\" %*\r\n",
-            new UTF8Encoding(false));
-        Ok("lcs.cmd");
-    }
-
-    private static void EnsureImage(string image, string installDir)
-    {
-        Step("Checking for image " + image);
-
-        string ignored;
-        if (TryRun("docker", "image inspect " + image, out ignored))
+        foreach (string name in EmbeddedScripts)
         {
-            Ok("Already present.");
-            return;
+            // No BOM: PowerShell copes either way, but a BOM-free UTF-8 file is what the
+            // repository ships and keeps the extracted copy byte-identical.
+            File.WriteAllText(Path.Combine(workDir, name), ReadEmbedded(name), new UTF8Encoding(false));
         }
 
-        // Shipping the image as a tarball beside the exe is what makes this installer
-        // usable on a machine with no access to a registry holding LCS.
-        string tar = Path.Combine(AppDirectory(), ImageTarName);
+        // An image tarball sitting beside the exe is how an offline install supplies the
+        // LCS image; the installer looks for it next to the script it is running from.
+        string tar = Path.Combine(AppDirectory(), "lcs-image.tar");
         if (File.Exists(tar))
         {
-            Ok("Loading " + ImageTarName + " - this takes a minute.");
-            string output;
-            if (!TryRun("docker", "load -i \"" + tar + "\"", out output))
-            {
-                throw new Exception("docker load failed for " + tar + ".\r\n" + output);
-            }
-            // Copy it next to the script so lcs.ps1 can reload it after a docker prune.
-            string kept = Path.Combine(installDir, ImageTarName);
-            if (!File.Exists(kept)) File.Copy(tar, kept);
-            Ok("Image loaded.");
-            return;
+            File.Copy(tar, Path.Combine(workDir, "lcs-image.tar"));
         }
 
-        Warn("Image not found and no " + ImageTarName + " beside this installer.");
-        Warn("Build it from a checkout of the LCS repository:");
-        Warn("    docker build -f docker/Dockerfile -t " + image + " .");
-        Warn("Setup will finish; LCS will not start until the image exists.");
+        return workDir;
     }
 
-    private static void CreateShortcuts(string installDir)
+    // Passes the caller's flags straight through so LCS-Setup.exe accepts everything
+    // lcs-install.ps1 does, without this file having to know what those options are.
+    private static string BuildArguments(string[] args, bool silent)
     {
-        Step("Creating shortcuts");
+        var sb = new StringBuilder();
+        if (silent) sb.Append(" -Silent");
 
-        string target = Path.Combine(installDir, "lcs.cmd");
-        string startMenu = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.Programs), ProductName);
-        Directory.CreateDirectory(startMenu);
-
-        CreateShortcut(Path.Combine(startMenu, "Start LCS.lnk"), target, "-Action Up", installDir);
-        CreateShortcut(Path.Combine(startMenu, "Stop LCS.lnk"), target, "-Action Down", installDir);
-        Ok("Start Menu > " + ProductName);
-
-        string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-        CreateShortcut(Path.Combine(desktop, "Start LCS.lnk"), target, "-Action Up", installDir);
-        Ok("Desktop > Start LCS");
-    }
-
-    // Built through WScript.Shell by late binding so the exe needs no COM reference and
-    // compiles with nothing but csc.exe.
-    private static void CreateShortcut(string linkPath, string target, string arguments, string workingDir)
-    {
-        Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-        if (shellType == null)
+        foreach (string arg in args)
         {
-            Warn("Windows Script Host unavailable; skipping " + Path.GetFileName(linkPath) + ".");
-            return;
+            string value;
+            if (TryValue(arg, "/dir=", out value))   { sb.Append(" -InstallDir \"").Append(value).Append('"'); }
+            else if (TryValue(arg, "/image=", out value)) { sb.Append(" -Image \"").Append(value).Append('"'); }
+            else if (Matches(arg, "/nostart"))       { sb.Append(" -NoStart"); }
+            else if (Matches(arg, "/skipdeps"))      { sb.Append(" -SkipDependencies"); }
         }
 
-        object shell = Activator.CreateInstance(shellType);
-        object link = shellType.InvokeMember("CreateShortcut",
-            BindingFlags.InvokeMethod, null, shell, new object[] { linkPath });
-        Type linkType = link.GetType();
-
-        Set(linkType, link, "TargetPath", target);
-        Set(linkType, link, "Arguments", arguments);
-        Set(linkType, link, "WorkingDirectory", workingDir);
-        Set(linkType, link, "Description", "Local Cloud Services - AWS-compatible emulator");
-        linkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
+        return sb.ToString();
     }
 
-    private static void Set(Type t, object instance, string property, string value)
+    private static int RunInstaller(string workDir, string extraArguments)
     {
-        t.InvokeMember(property, BindingFlags.SetProperty, null, instance, new object[] { value });
-    }
+        string script = Path.Combine(workDir, "lcs-install.ps1");
 
-    private static void Done(string installDir, string image)
-    {
-        Console.WriteLine();
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("  Installed.");
-        Console.ResetColor();
-        Console.WriteLine();
-        Console.WriteLine("  Start LCS      Start Menu > " + ProductName + " > Start LCS");
-        Console.WriteLine("  Or from a shell");
-        Console.WriteLine("      \"" + Path.Combine(installDir, "lcs.cmd") + "\"");
-        Console.WriteLine();
-        Console.WriteLine("  Console        http://localhost:4566/_lcs/ui/");
-        Console.WriteLine("  Endpoint       http://localhost:4566");
-        Console.WriteLine("  Image          " + image);
-        Console.WriteLine();
-    }
-
-    private static void RunScript(string installDir, string arguments)
-    {
+        // -ExecutionPolicy Bypass applies to this process only. It does not change the
+        // machine's policy, which is why the installer never has to touch that setting.
         var psi = new ProcessStartInfo
         {
-            FileName = Path.Combine(installDir, "lcs.cmd"),
-            Arguments = arguments,
-            WorkingDirectory = installDir,
+            FileName = "powershell.exe",
+            Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"" + extraArguments,
+            WorkingDirectory = workDir,
             UseShellExecute = false
         };
-        using (Process p = Process.Start(psi))
+
+        using (Process process = Process.Start(psi))
         {
-            p.WaitForExit();
+            process.WaitForExit();
+            return process.ExitCode;
         }
     }
 
@@ -242,44 +142,14 @@ internal static class LcsSetup
         {
             if (resource.EndsWith(name, StringComparison.OrdinalIgnoreCase))
             {
-                using (Stream s = asm.GetManifestResourceStream(resource))
-                using (var reader = new StreamReader(s))
+                using (Stream stream = asm.GetManifestResourceStream(resource))
+                using (var reader = new StreamReader(stream))
                 {
                     return reader.ReadToEnd();
                 }
             }
         }
-        throw new Exception("Installer is missing its embedded copy of " + name + ".");
-    }
-
-    private static bool TryRun(string file, string arguments, out string output)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = file,
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-
-        try
-        {
-            using (Process p = Process.Start(psi))
-            {
-                string stdout = p.StandardOutput.ReadToEnd();
-                string stderr = p.StandardError.ReadToEnd();
-                p.WaitForExit();
-                output = string.IsNullOrEmpty(stdout.Trim()) ? stderr : stdout;
-                return p.ExitCode == 0;
-            }
-        }
-        catch (Exception ex)
-        {
-            output = ex.Message;
-            return false;
-        }
+        throw new Exception("this build is missing its embedded copy of " + name + ".");
     }
 
     private static string AppDirectory()
@@ -287,47 +157,51 @@ internal static class LcsSetup
         return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
     }
 
-    private static string GetArg(string[] args, string prefix)
+    private static void TryDelete(string directory)
     {
-        foreach (string a in args)
-        {
-            if (a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return a.Substring(prefix.Length).Trim('"');
-            }
-        }
-        return null;
+        if (directory == null || !Directory.Exists(directory)) return;
+        try { Directory.Delete(directory, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    private static bool Ask(string question)
+    private static bool HasFlag(string[] args, string flag)
     {
-        Console.Write("  " + question + " [Y/n] ");
-        string answer = Console.ReadLine();
-        return string.IsNullOrWhiteSpace(answer) || answer.Trim().StartsWith("y", StringComparison.OrdinalIgnoreCase);
+        return Array.Exists(args, a => a.Equals(flag, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool Matches(string arg, string flag)
+    {
+        return arg.Equals(flag, StringComparison.OrdinalIgnoreCase)
+            || arg.Equals("-" + flag.TrimStart('/'), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryValue(string arg, string prefix, out string value)
+    {
+        if (arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            value = arg.Substring(prefix.Length).Trim('"');
+            return true;
+        }
+        value = null;
+        return false;
     }
 
     private static void Pause()
     {
         Console.WriteLine("  Press any key to close.");
-        try { Console.ReadKey(true); } catch (InvalidOperationException) { /* piped input */ }
-    }
-
-    private static void Step(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  ==> " + message);
-        Console.ResetColor();
-    }
-
-    private static void Ok(string message)
-    {
-        Console.WriteLine("      " + message);
+        try { Console.ReadKey(true); } catch (InvalidOperationException) { /* stdin redirected */ }
     }
 
     private static void Warn(string message)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("      " + message);
+        Console.WriteLine(message);
+        Console.ResetColor();
+    }
+
+    private static void Error(string message)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine(message);
         Console.ResetColor();
     }
 }
