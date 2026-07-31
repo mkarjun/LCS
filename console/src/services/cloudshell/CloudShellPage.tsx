@@ -261,7 +261,15 @@ export default function CloudShellPage() {
         ))}
       </div>
 
-      <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={(event) => onUploadPicked(event.target.files)} />
+      <input
+        ref={fileInputRef}
+        id="cloudshell-upload"
+        name="cloudshell-upload"
+        type="file"
+        aria-label="Upload file to CloudShell"
+        style={{ display: "none" }}
+        onChange={(event) => onUploadPicked(event.target.files)}
+      />
 
       <Modal
         visible={welcome}
