@@ -707,6 +707,14 @@ dedicated pass to bring those 10 to 100%, then start the next 10. Gaps found so 
 recorded here so the pass has a concrete checklist.
 
 ### Lambda
+- ~~**Create function errors out with no execution role.**~~ **Resolved 2026-07-31.** The
+  create-function form now defaults to "Create a new role with basic Lambda permissions"
+  (AWS's own default): it calls IAM `CreateRole` with a Lambda trust policy and attaches
+  `AWSLambdaBasicExecutionRole` before `CreateFunction`, so a fresh account with zero roles
+  can create a working function. "Use an existing role" and AWS's policy-template
+  multiselect (SQS/DynamoDB/Kinesis/VPC service-role policies) are also offered. Role
+  auto-creation is retried once on a name collision. Verified end to end against the
+  emulator: CreateRole → AttachRolePolicy → CreateFunction returns State=Active.
 - **Code tab** — AWS's first and default tab, not built at all. Biggest single gap.
 - Tab order wrong: AWS is Code, Test, Monitor, Configuration, Aliases, Versions.
 - Function overview panel (Diagram/Template, Add trigger, Add destination).
@@ -715,20 +723,52 @@ recorded here so the pass has a concrete checklist.
 - Monitor: AWS shows a metrics grid with a time-range selector.
 
 ### EC2
-- **No create actions on resource pages.** Key Pairs, Load Balancers, Target Groups,
-  Volumes, Security Groups, Elastic IPs, VPCs, Subnets all list correctly but offer no
-  way to create — the pages are read-only. Instances is the only one with a create flow.
-- No Connect page (EC2 Instance Connect / Session Manager / SSH client tabs).
-- No Actions submenus (Instance settings, Networking, Security, Image and templates).
-- No inline Name editing, no security group rule detail pages.
+- ~~**No create actions on resource pages.**~~ **Resolved 2026-07-31.** `ResourceListPage`
+  now carries per-resource create modals and an Actions menu (delete, plus edit-rules for
+  security groups), with row selection, sorting, and a `CollectionPreferences` panel
+  (page size, wrap lines, column visibility). Create flows added — all over write-then-read
+  verified APIs: **Key Pairs** (RSA/ED25519, downloads the .pem once), **Security Groups**
+  (with an inbound/outbound rule editor over Authorize/Revoke), **Volumes**, **VPCs**,
+  **Subnets**, **Route Tables**, **Internet Gateways**, **Elastic IPs** (allocate). Delete
+  is wired for volumes, security groups, key pairs, VPCs, subnets, route tables, internet
+  gateways, and release for Elastic IPs, each with an AWS-shaped confirm (retype "delete"
+  on the destructive ones). Still read-only, by design: Load Balancers, Target Groups,
+  Listeners, Auto Scaling groups/launch configs (no Create*/Delete* in LCS), Network
+  Interfaces (no CreateNetworkInterface), AMIs, Instance Types.
+- Backend key-pair fixes landed with the create flow: `CreateKeyPair` now honours
+  `KeyType` (rsa/ed25519) and inline `TagSpecification`s; `DescribeKeyPairs` now emits
+  `keyType` and `createTime`; `ImportKeyPair` infers the type from the key material and
+  applies tags. So the Key Pairs table's Type and Created columns are real.
+- Security group rule counts now read "N Permission entries" (AWS's wording), the group ID
+  column is present, and an Owner column was added.
+- Still open: No Connect page (EC2 Instance Connect / Session Manager / SSH client tabs).
+  No Actions submenus on instances (Instance settings, Networking, Security, Image and
+  templates). No inline Name editing. Attaching an internet gateway to a VPC, associating a
+  route table with a subnet, and adding routes are not yet exposed (the APIs exist:
+  AttachInternetGateway, AssociateRouteTable, CreateRoute). No split detail panel on the
+  resource pages.
 
 ### S3
 - No Metrics or Management tabs.
 - Upload is text-only; no binary or multipart.
 
 ### IAM
-- No create flows for roles, groups, or policies (users only).
-- No policy document viewer on the Policies page.
+- ~~No create flows for roles, groups, or policies (users only).~~ **Resolved 2026-07-31.**
+  - **Create role** — trusted entity type (AWS service / AWS account / custom trust
+    policy), a service-principal picker limited to services LCS runs, cross-account with
+    MFA + external-ID conditions, a live trust-policy preview, and a managed-policy
+    multiselect attached via `AttachRolePolicy` after create. Web-identity and SAML options
+    are shown disabled — no `CreateOpenIDConnectProvider`/`CreateSAMLProvider` in LCS.
+  - **Create group** — name, optional user membership (`AddUserToGroup`), optional attached
+    policies (`AttachGroupPolicy`).
+  - **Create policy** — JSON document tab with client-side JSON validation. The visual
+    editor is deliberately omitted (no per-service action catalogue to drive it).
+- ~~No policy document viewer on the Policies page.~~ **Resolved 2026-07-31.** The policy
+  name opens a document modal (`GetPolicy` + `GetPolicyVersion`, decoded and pretty-printed)
+  with ARN/default-version/last-edited metadata and Copy.
+- Follow-up policies (role/group attach) are best-effort: the identity is created even if an
+  attach fails, and the notification names what did not land — matching how AWS sequences
+  these as separate calls.
 
 ### DynamoDB (from the maintainer's AWS screenshots)
 - **Table detail tabs are wrong.** AWS uses Settings, Indexes, Monitor, Global tables,

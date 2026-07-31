@@ -1,15 +1,18 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ListRolesCommand } from "@aws-sdk/client-iam";
 import type { Role } from "@aws-sdk/client-iam";
 import Link from "@cloudscape-design/components/link";
 
 import { IamListPage } from "./IamListPage";
+import { CreateRoleModal } from "./CreateRoleModal";
 import { dash, formatIamDate, trustedEntities, useIamClient } from "./useIamClient";
 
 export default function RolesPage() {
   const navigate = useNavigate();
   const client = useIamClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
 
   const load = useCallback(
     async (): Promise<Role[]> => (await client.send(new ListRolesCommand({}))).Roles ?? [],
@@ -29,6 +32,8 @@ export default function RolesPage() {
       ]}
       trackBy={(role) => role.RoleName ?? ""}
       load={load}
+      reloadToken={reloadToken}
+      primaryAction={{ label: "Create role", onClick: () => setCreateOpen(true) }}
       columns={[
         {
           id: "roleName",
@@ -54,6 +59,15 @@ export default function RolesPage() {
         { id: "path", header: "Path", cell: (role) => dash(role.Path) },
         { id: "created", header: "Creation time", cell: (role) => formatIamDate(role.CreateDate) },
       ]}
-    />
+    >
+      <CreateRoleModal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        onCreated={() => {
+          setCreateOpen(false);
+          setReloadToken((token) => token + 1);
+        }}
+      />
+    </IamListPage>
   );
 }

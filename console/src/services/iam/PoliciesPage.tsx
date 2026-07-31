@@ -1,12 +1,18 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { ListPoliciesCommand } from "@aws-sdk/client-iam";
 import type { Policy } from "@aws-sdk/client-iam";
+import Link from "@cloudscape-design/components/link";
 
 import { IamListPage } from "./IamListPage";
+import { CreatePolicyModal } from "./CreatePolicyModal";
+import { PolicyDocumentModal } from "./PolicyDocumentModal";
 import { dash, formatIamDate, useIamClient } from "./useIamClient";
 
 export default function PoliciesPage() {
   const client = useIamClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [viewing, setViewing] = useState<Policy | null>(null);
 
   const load = useCallback(
     async (): Promise<Policy[]> =>
@@ -27,12 +33,26 @@ export default function PoliciesPage() {
       ]}
       trackBy={(policy) => policy.Arn ?? ""}
       load={load}
+      reloadToken={reloadToken}
+      primaryAction={{ label: "Create policy", onClick: () => setCreateOpen(true) }}
       columns={[
         {
           id: "policyName",
           header: "Policy name",
-          cell: (policy) => policy.PolicyName ?? "-",
           isRowHeader: true,
+          // AWS drills into a policy page; the document is the part of it LCS can serve,
+          // so the name opens the document rather than a page with one populated tab.
+          cell: (policy) => (
+            <Link
+              href={`#${policy.Arn}`}
+              onFollow={(event) => {
+                event.preventDefault();
+                setViewing(policy);
+              }}
+            >
+              {policy.PolicyName}
+            </Link>
+          ),
         },
         {
           id: "type",
@@ -54,6 +74,23 @@ export default function PoliciesPage() {
           cell: (policy) => formatIamDate(policy.CreateDate),
         },
       ]}
-    />
+    >
+      <CreatePolicyModal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        onCreated={() => {
+          setCreateOpen(false);
+          setReloadToken((token) => token + 1);
+        }}
+      />
+      {viewing !== null && (
+        <PolicyDocumentModal
+          visible
+          onDismiss={() => setViewing(null)}
+          policyArn={viewing.Arn ?? ""}
+          policyName={viewing.PolicyName ?? ""}
+        />
+      )}
+    </IamListPage>
   );
 }

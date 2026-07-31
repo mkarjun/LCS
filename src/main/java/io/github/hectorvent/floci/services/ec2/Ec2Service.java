@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -1564,21 +1565,49 @@ public class Ec2Service implements ContainerTeardown {
     // ─── Key Pairs ─────────────────────────────────────────────────────────────
 
     public KeyPair createKeyPair(String region, String keyName) {
+        return createKeyPair(region, keyName, null);
+    }
+
+    /**
+     * Creates a key pair. {@code keyType} is AWS's {@code rsa} (the default) or
+     * {@code ed25519}; it decides the PEM header of the returned private key, which is
+     * what an SSH client keys off, so it has to round-trip on DescribeKeyPairs too.
+     */
+    public KeyPair createKeyPair(String region, String keyName, String keyType) {
         ensureDefaultResources(region);
         boolean exists = keyPairs.scan(k -> true).stream()
                 .anyMatch(k -> k.getRegion().equals(region) && k.getKeyName().equals(keyName));
         if (exists) {
             throw new AwsException("InvalidKeyPair.Duplicate", "The keypair '" + keyName + "' already exists", 400);
         }
+        String resolvedType = normalizeKeyType(keyType);
         String keyPairId = "key-" + randomHex(17);
         KeyPair kp = new KeyPair();
         kp.setKeyPairId(keyPairId);
         kp.setKeyName(keyName);
         kp.setKeyFingerprint("00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00");
-        kp.setKeyMaterial("-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds3xHn/ygWep4Ib/ue7YiKbCIZgYpYDe0+FAKE\n-----END RSA PRIVATE KEY-----");
+        kp.setKeyMaterial("ed25519".equals(resolvedType)
+                ? "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzFAKE\n-----END OPENSSH PRIVATE KEY-----"
+                : "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds3xHn/ygWep4Ib/ue7YiKbCIZgYpYDe0+FAKE\n-----END RSA PRIVATE KEY-----");
+        kp.setKeyType(resolvedType);
+        kp.setCreateTime(Instant.now());
         kp.setRegion(region);
         keyPairs.put(key(region, keyPairId), kp);
         return kp;
+    }
+
+    /** AWS accepts only "rsa" and "ed25519", and defaults to "rsa" when KeyType is absent. */
+    private String normalizeKeyType(String keyType) {
+        if (keyType == null || keyType.isBlank()) {
+            return "rsa";
+        }
+        String lower = keyType.toLowerCase(Locale.ROOT);
+        if (!"rsa".equals(lower) && !"ed25519".equals(lower)) {
+            throw new AwsException("InvalidKeyPair.KeyTypeNotSupported",
+                    "Value (" + keyType + ") for parameter KeyType is invalid. "
+                            + "Valid values are rsa and ed25519", 400);
+        }
+        return lower;
     }
 
     public List<KeyPair> describeKeyPairs(String region, List<String> keyNames, List<String> keyPairIds) {
@@ -1631,6 +1660,12 @@ public class Ec2Service implements ContainerTeardown {
         kp.setKeyName(keyName);
         kp.setKeyFingerprint("00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00");
         kp.setPublicKey(publicKeyMaterial);
+        // ImportKeyPair has no KeyType parameter — AWS reads the type off the OpenSSH
+        // public key's algorithm prefix.
+        kp.setKeyType(publicKeyMaterial != null && publicKeyMaterial.startsWith("ssh-ed25519")
+                ? "ed25519"
+                : "rsa");
+        kp.setCreateTime(Instant.now());
         kp.setRegion(region);
         keyPairs.put(key(region, keyPairId), kp);
         return kp;

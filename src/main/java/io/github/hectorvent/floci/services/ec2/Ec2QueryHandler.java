@@ -1208,7 +1208,14 @@ public class Ec2QueryHandler {
 
     private Response handleCreateKeyPair(MultivaluedMap<String, String> p, String region) {
         String keyName = p.getFirst("KeyName");
-        KeyPair kp = service.createKeyPair(region, keyName);
+        KeyPair kp = service.createKeyPair(region, keyName, p.getFirst("KeyType"));
+        // Own copy for the response, the same reason the security-group-rule tags do it:
+        // createTags writes through the store, which need not hand back this instance.
+        List<Tag> keyTags = parseTagsForResource(p, "key-pair");
+        if (!keyTags.isEmpty()) {
+            service.createTags(region, List.of(kp.getKeyPairId()), keyTags);
+            kp.setTags(new ArrayList<>(keyTags));
+        }
         XmlBuilder xml = new XmlBuilder()
                 .start("CreateKeyPairResponse", AwsNamespaces.EC2)
                 .elem("requestId", UUID.randomUUID().toString())
@@ -1216,6 +1223,8 @@ public class Ec2QueryHandler {
                 .elem("keyFingerprint", kp.getKeyFingerprint())
                 .elem("keyMaterial", kp.getKeyMaterial())
                 .elem("keyPairId", kp.getKeyPairId())
+                .elem("keyType", kp.getKeyType())
+                .raw(tagSetXml(kp.getTags()))
                 .end("CreateKeyPairResponse");
         return xmlResponse(xml.build());
     }
@@ -1233,7 +1242,11 @@ public class Ec2QueryHandler {
                     .elem("keyPairId", kp.getKeyPairId())
                     .elem("keyName", kp.getKeyName())
                     .elem("keyFingerprint", kp.getKeyFingerprint())
-                    .raw(tagSetXml(kp.getTags()))
+                    .elem("keyType", kp.getKeyType() != null ? kp.getKeyType() : "rsa");
+            if (kp.getCreateTime() != null) {
+                xml.elem("createTime", ISO_FMT.format(kp.getCreateTime()));
+            }
+            xml.raw(tagSetXml(kp.getTags()))
                     .end("item");
         }
         xml.end("keySet").end("DescribeKeyPairsResponse");
@@ -1252,12 +1265,18 @@ public class Ec2QueryHandler {
         String encoded = p.getFirst("PublicKeyMaterial");
         String publicKeyMaterial = new String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8);
         KeyPair kp = service.importKeyPair(region, keyName, publicKeyMaterial);
+        List<Tag> keyTags = parseTagsForResource(p, "key-pair");
+        if (!keyTags.isEmpty()) {
+            service.createTags(region, List.of(kp.getKeyPairId()), keyTags);
+            kp.setTags(new ArrayList<>(keyTags));
+        }
         XmlBuilder xml = new XmlBuilder()
                 .start("ImportKeyPairResponse", AwsNamespaces.EC2)
                 .elem("requestId", UUID.randomUUID().toString())
                 .elem("keyName", kp.getKeyName())
                 .elem("keyFingerprint", kp.getKeyFingerprint())
                 .elem("keyPairId", kp.getKeyPairId())
+                .raw(tagSetXml(kp.getTags()))
                 .end("ImportKeyPairResponse");
         return xmlResponse(xml.build());
     }

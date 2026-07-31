@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { GetGroupCommand, ListGroupsCommand } from "@aws-sdk/client-iam";
 import type { Group } from "@aws-sdk/client-iam";
 
 import { IamListPage } from "./IamListPage";
+import { CreateGroupModal } from "./CreateGroupModal";
 import { dash, formatIamDate, useIamClient } from "./useIamClient";
 
 interface GroupRow extends Group {
@@ -11,6 +12,8 @@ interface GroupRow extends Group {
 
 export default function GroupsPage() {
   const client = useIamClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
 
   const load = useCallback(async (): Promise<GroupRow[]> => {
     const groups = (await client.send(new ListGroupsCommand({}))).Groups ?? [];
@@ -40,6 +43,8 @@ export default function GroupsPage() {
       ]}
       trackBy={(group) => group.GroupName ?? ""}
       load={load}
+      reloadToken={reloadToken}
+      primaryAction={{ label: "Create group", onClick: () => setCreateOpen(true) }}
       columns={[
         {
           id: "groupName",
@@ -55,6 +60,15 @@ export default function GroupsPage() {
         { id: "path", header: "Path", cell: (group) => dash(group.Path) },
         { id: "created", header: "Creation time", cell: (group) => formatIamDate(group.CreateDate) },
       ]}
-    />
+    >
+      <CreateGroupModal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        onCreated={() => {
+          setCreateOpen(false);
+          setReloadToken((token) => token + 1);
+        }}
+      />
+    </IamListPage>
   );
 }
