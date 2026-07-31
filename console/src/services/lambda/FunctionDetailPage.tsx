@@ -269,7 +269,13 @@ export default function FunctionDetailPage() {
       }
     >
       <SpaceBetween size="l">
-        <FunctionOverview config={config} />
+        <FunctionOverview
+          config={config}
+          onAddTrigger={() => setSearchParams({ tab: "configuration", section: "triggers" })}
+          onAddDestination={() =>
+            setSearchParams({ tab: "configuration", section: "destinations" })
+          }
+        />
 
         <Tabs
           activeTabId={activeTab}
@@ -413,6 +419,11 @@ export default function FunctionDetailPage() {
                   config={config}
                   reservedConcurrency={reservedConcurrency}
                   tags={tags}
+                  client={client}
+                  functionName={functionName}
+                  functionArn={config?.FunctionArn ?? functionName}
+                  onChanged={load}
+                  initialSection={searchParams.get("section")}
                 />
               ),
             },

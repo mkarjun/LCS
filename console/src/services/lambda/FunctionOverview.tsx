@@ -19,7 +19,15 @@ import { dash, formatLambdaDate } from "./lambdaFormat";
  * with no single console surface in LCS yet; showing the buttons greyed keeps the AWS
  * shape while being honest that the flow is not built — the same rule the nav uses.
  */
-export function FunctionOverview({ config }: { config: FunctionConfiguration | null }) {
+export function FunctionOverview({
+  config,
+  onAddTrigger,
+  onAddDestination,
+}: {
+  config: FunctionConfiguration | null;
+  onAddTrigger: () => void;
+  onAddDestination: () => void;
+}) {
   const { notify } = useNotifications();
   const [view, setView] = useState("diagram");
 
@@ -63,7 +71,7 @@ export function FunctionOverview({ config }: { config: FunctionConfiguration | n
           {view === "diagram" ? (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", alignItems: "center", gap: 12 }}>
               <div>
-                <Button disabled iconName="add-plus">
+                <Button iconName="add-plus" onClick={onAddTrigger}>
                   Add trigger
                 </Button>
               </div>
@@ -81,7 +89,7 @@ export function FunctionOverview({ config }: { config: FunctionConfiguration | n
                 </Box>
               </div>
               <div style={{ textAlign: "right" }}>
-                <Button disabled iconName="add-plus">
+                <Button iconName="add-plus" onClick={onAddDestination}>
                   Add destination
                 </Button>
               </div>
