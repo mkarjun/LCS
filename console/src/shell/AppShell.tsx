@@ -17,6 +17,8 @@ import { ServiceSearch } from "./ServiceSearch";
 import { useActiveServiceNav } from "./ServiceNavContext";
 import { UNAVAILABLE_HREF } from "./navUnavailable";
 import { ServiceIcon } from "./ServiceIcon";
+import { getVisualMode, setVisualMode } from "./theme";
+import type { VisualMode } from "./theme";
 
 export function AppShell() {
   const navigate = useNavigate();
@@ -26,6 +28,7 @@ export function AppShell() {
   const { summary, region, effectiveAccountId } = useEmulator();
   const serviceNav = useActiveServiceNav();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [visualMode, setVisualModeState] = useState<VisualMode>(getVisualMode);
 
   // All 53 emulated services are navigable. Categories start collapsed so the rail stays
   // scannable, matching how AWS groups its "All services" drawer.
@@ -116,11 +119,40 @@ export function AppShell() {
                     })),
             },
             {
-              type: "button",
+              // AWS's gear = user settings (Language, Visual mode), not region/account.
+              // Visual mode really switches the Cloudscape theme and persists.
+              type: "menu-dropdown",
               iconName: "settings",
               ariaLabel: "Settings",
               title: "Settings",
-              onClick: () => setSettingsOpen(true),
+              items: [
+                {
+                  id: "visual-mode",
+                  text: "Visual mode",
+                  items: [
+                    { id: "vm-browser", text: "Browser default", disabled: visualMode === "browser" },
+                    { id: "vm-light", text: "Light", disabled: visualMode === "light" },
+                    { id: "vm-dark", text: "Dark", disabled: visualMode === "dark" },
+                  ],
+                },
+                {
+                  id: "language",
+                  text: "Language",
+                  items: [{ id: "lang-browser", text: "Browser default", disabled: true }],
+                },
+              ],
+              onItemClick: (event) => {
+                const map: Record<string, VisualMode> = {
+                  "vm-browser": "browser",
+                  "vm-light": "light",
+                  "vm-dark": "dark",
+                };
+                const next = map[event.detail.id];
+                if (next) {
+                  setVisualMode(next);
+                  setVisualModeState(next);
+                }
+              },
             },
             {
               type: "button",
