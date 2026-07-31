@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache 2.0"></a>
 </p>
 
 <p align="center">
@@ -28,9 +28,9 @@ testing, and CI. It gives you AWS-shaped services on your machine without a clou
 an auth token, or paid feature gates. Point your AWS SDK, CLI, Terraform, CDK, OpenTofu, or
 test suite at `http://localhost:4566` and keep your existing workflows.
 
-LCS is built on the Floci codebase and continues as an MIT-licensed derivative with
-upstream attribution preserved (see [License](#license)). It is growing into its own
-product — a full AWS-replica console, and its own execution work over time.
+LCS is built on the Floci codebase (originally MIT-licensed) and is distributed under
+Apache-2.0, with upstream attribution preserved (see [License](#license)). It is growing
+into its own product — a full AWS-replica console, and its own execution work over time.
 
 > **Repository note.** Some Docker image references below use `lcs/lcs`, the tag the
 > installers build locally. Where an absolute repository, docs, or registry URL would
@@ -580,9 +580,11 @@ services:
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
 
-LCS is built on the Floci codebase and preserves upstream attribution in
-[NOTICE](NOTICE) and [LICENSES/UPSTREAM-FLOCI-MIT.txt](LICENSES/UPSTREAM-FLOCI-MIT.txt).
-The MIT license requires that the original copyright notice be preserved; it is, and
-this project remains MIT-licensed.
+LCS is built on the Floci codebase, which is MIT-licensed. MIT is permissive and allows
+redistribution under Apache-2.0 provided the original MIT copyright and licence text are
+preserved. They are: the upstream MIT licence is kept verbatim in
+[LICENSES/UPSTREAM-FLOCI-MIT.txt](LICENSES/UPSTREAM-FLOCI-MIT.txt) and attributed in
+[NOTICE](NOTICE). Portions derived from Floci remain under MIT; the project as a whole and
+all new contributions are Apache-2.0 licensed.

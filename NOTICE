@@ -1,10 +1,17 @@
-LCS is built from and derived from the Floci codebase.
+LCS — Local Cloud Services
+Copyright 2026 LCS contributors
 
-Upstream attribution:
-Copyright (c) 2025 Hector Ventura
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-LCS remains MIT-licensed. The repository-level MIT license is in LICENSE.
-The preserved upstream MIT notice is also kept in
-LICENSES/UPSTREAM-FLOCI-MIT.txt.
+This product includes software originally developed as the Floci project,
+licensed under the MIT License:
 
-This notice is for provenance and attribution. It does not replace LICENSE.
+    Copyright (c) 2025 Hector Ventura
+
+The full upstream MIT license text is preserved in
+LICENSES/UPSTREAM-FLOCI-MIT.txt and must be retained in redistributions, as
+the MIT License requires. Portions of this repository derive from that work;
+those portions remain subject to the MIT License, while the project as a whole
+and all new contributions are licensed under Apache-2.0.
+
+This notice is for provenance and attribution. It does not modify LICENSE.

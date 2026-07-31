@@ -177,33 +177,33 @@ export function CodeEditor({
             {loadError}
           </Alert>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 0, minHeight: 420 }}>
-            <div
-              style={{
-                borderRight: "1px solid var(--awsui-color-border-divider-default, #e9ebed)",
-                paddingRight: 8,
-              }}
-            >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "220px 1fr",
+              gap: 0,
+              minHeight: 420,
+            }}
+          >
+            <div style={{ borderRight: "1px solid rgba(128,128,128,0.3)", paddingRight: 8 }}>
               <Box variant="awsui-key-label" padding={{ bottom: "xs" }}>
-                Environment
+                Explorer
               </Box>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {files.map((file) => (
                   // A plain clickable row rather than a nav component — the file list is
-                  // flat and this keeps keyboard focus on the editor.
+                  // flat and this keeps keyboard focus on the editor. Box themes the colour.
                   <div
                     key={file.name}
                     onClick={() => setActiveFile(file.name)}
-                    style={{
-                      cursor: "pointer",
-                      fontWeight: file.name === activeFile ? 700 : 400,
-                      color:
-                        file.name === activeFile
-                          ? "var(--awsui-color-text-accent, #0972d3)"
-                          : "var(--awsui-color-text-body-default, #000716)",
-                    }}
+                    style={{ cursor: "pointer" }}
                   >
-                    {file.name}
+                    <Box
+                      variant={file.name === activeFile ? "strong" : "span"}
+                      color={file.name === activeFile ? "text-status-info" : "inherit"}
+                    >
+                      {file.name}
+                    </Box>
                     {file.isBinary && (
                       <>
                         {" "}
@@ -222,6 +222,8 @@ export function CodeEditor({
                   {current.name} is a binary file and cannot be edited here.
                 </Alert>
               ) : (
+                // color:inherit / background:transparent make the editor follow the
+                // Cloudscape theme (light or dark) instead of a hardcoded palette.
                 <textarea
                   value={current.text}
                   onChange={(event) => updateActive(event.target.value)}
@@ -234,11 +236,11 @@ export function CodeEditor({
                     fontSize: 13,
                     lineHeight: 1.5,
                     tabSize: 2,
-                    border: "1px solid var(--awsui-color-border-input-default, #8c8c94)",
+                    border: "1px solid rgba(128,128,128,0.4)",
                     borderRadius: 8,
                     padding: 12,
-                    background: "var(--awsui-color-background-input-default, #ffffff)",
-                    color: "var(--awsui-color-text-body-default, #000716)",
+                    background: "transparent",
+                    color: "inherit",
                     resize: "vertical",
                   }}
                 />
