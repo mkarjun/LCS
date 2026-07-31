@@ -967,17 +967,62 @@ Everything below is what a new session needs to continue without re-deriving any
 
 ## Current state
 
-- Branch: `claude/lcs-console-core-services-d38217`.
+- Branch: `claude/ec2-lambda-core-features-7d0822`.
+- **Repo / licence changed (2026-07-31).** LCS now lives in the maintainer's own repo,
+  **`https://github.com/mkarjun/LCS.git`** (git remote `lcs`). Do **not** push to
+  `floci-io/floci` (upstream; `origin` still points there). Project relicensed to
+  **Apache-2.0** (`LICENSE`); upstream Floci MIT preserved verbatim in
+  `LICENSES/UPSTREAM-FLOCI-MIT.txt` + `NOTICE`. Open-core direction (free core, paid
+  enterprise later). `gh` CLI not installed — PRs open via the URL git prints on push.
 - Console coverage: **all 10 core services** have real surfaces —
   S3, EC2, IAM, Lambda, CloudWatch, DynamoDB, SQS, SNS, **RDS**, **CloudFormation**.
   The other 60 are reachable via honest placeholder pages.
-- The 10-service mark is reached, so the deliverables above are now due: README, the
-  attribution note, and a **full** compatibility-suite run before any push.
-- Next per the agreed strategy: the **100% pass** over these 10, working from the
-  completeness backlog above, before starting the next 10.
 - Upstream merged: 457 commits, 52 -> 70 services. Node compatibility suite passed
   433/433. **The other five suites (Python, AWS CLI, Go, Rust, Java) have not been run,
   and none has been re-run since the four emulator fixes recorded in the backlog.**
+
+### Session 2026-07-31 — EC2/IAM/Lambda depth, CloudShell, shell polish
+
+Shipped and pushed to `mkarjun/LCS` this session:
+
+- **EC2 create/manage.** `ResourceListPage` gained per-resource create modals + an Actions
+  menu (delete, edit security-group rules), row selection, sorting, `CollectionPreferences`.
+  Create flows: key pairs (RSA/ED25519, downloads .pem), security groups (rule editor),
+  volumes, VPCs, subnets, route tables, internet gateways, Elastic IPs. Backend key-pair
+  fix: `CreateKeyPair` honours KeyType + inline tags; `DescribeKeyPairs` emits keyType +
+  createTime; `ImportKeyPair` infers type. **(Java key-pair change unverified locally —
+  needs image rebuild.)**
+- **IAM create flows.** Create role (service/account/custom trust, live preview, managed-
+  policy attach), create group (users + policies), create policy (JSON + validation),
+  policy document viewer. *Still a single modal, not AWS's 3-step wizard — noted as
+  follow-up.*
+- **Lambda — the big one.**
+  - Auto execution-role on create (CreateRole + AttachRolePolicy(AWSLambdaBasicExecutionRole)
+    before CreateFunction) — a fresh account can create a working function.
+  - **Code tab** (in-browser editor): fetch package via Code.Location, unzip
+    (stored+deflate), edit, Deploy → UpdateFunctionCode. Verified round-trip.
+  - Detail rebuilt: overview panel (Diagram/Template, Add trigger/destination), header
+    Copy ARN / Throttle / Actions, tab order Code/Test/Monitor/Configuration/Aliases/Versions.
+  - **Configuration fully editable + AWS-order rail**: General, Environment variables, Tags,
+    Concurrency editable; **Triggers** (ListEventSourceMappings + Add via
+    CreateEventSourceMapping + delete), **Destinations** (PutFunctionEventInvokeConfig),
+    **Permissions** (role link + GetPolicy statements + AddPermission/RemovePermission).
+    Font/theme bug fixed (was hardcoded black; now Cloudscape `<Box color>`).
+- **CloudShell (frontend, phase 1).** New top-nav launch icon → `/_lcs/ui/cloudshell`.
+  xterm.js terminal (ANSI/UTF-8/mouse/copy-paste/resize/history), AWS-parity chrome
+  (title + Actions dropdown, region-named tabs, split rows/columns, fullscreen, welcome
+  dialog, drag-drop upload), WebSocket transport with reconnect + documented protocol +
+  in-browser preview-shell fallback. Backend (gateway → docker exec PTY, session/cred/
+  volume managers, STS creds, IAM via existing filter) **specced in
+  `planning/cloudshell.md`, not built** — the WebSocket is the seam.
+- **Shell polish.** Top-nav utility cluster (Help / Notifications-with-badge / Settings);
+  Settings = user settings (Visual mode light/dark/browser via `applyMode`, persisted) not
+  region/account; search bar left-aligned to match AWS.
+- **E2E.** `examples/lambda-e2e/` — self-checking script (env vars + SQS trigger +
+  destination config), **all 5 checks green** against the container. Found + documented:
+  async destination *delivery* is not emulated (config stored, not delivered).
+- **README** rebranded Floci → LCS (upstream-specific links dropped, not repointed;
+  `FLOCI_*` env vars kept verbatim with a rename note).
 
 ## Start the environment
 
