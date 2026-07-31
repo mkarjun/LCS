@@ -77,6 +77,52 @@ export function AppShell() {
           search={<ServiceSearch />}
           utilities={[
             {
+              // AWS's help menu. Points at real destinations inside the console rather than
+              // external docs (LCS has no public docs URL yet).
+              type: "menu-dropdown",
+              iconName: "status-info",
+              ariaLabel: "Help",
+              title: "Help",
+              items: [
+                { id: "home", text: "Console home" },
+                { id: "services", text: "All services" },
+                {
+                  id: "about",
+                  text: summary ? `LCS ${summary.version}` : "LCS",
+                  disabled: true,
+                },
+              ],
+              onItemClick: (event) => {
+                if (event.detail.id === "home") navigate("/");
+                if (event.detail.id === "services") navigate("/services");
+              },
+            },
+            {
+              // AWS's notifications bell. Shows the console's own flashbar history, with a
+              // badge while notifications are present — real data, not a placeholder.
+              type: "menu-dropdown",
+              iconName: "notification",
+              ariaLabel: "Notifications",
+              badge: items.length > 0,
+              items:
+                items.length === 0
+                  ? [{ id: "none", text: "No notifications", disabled: true }]
+                  : items.slice(0, 10).map((item, index) => ({
+                      id: String(item.id ?? index),
+                      text:
+                        (typeof item.header === "string" && item.header) ||
+                        (typeof item.content === "string" && item.content) ||
+                        "Notification",
+                    })),
+            },
+            {
+              type: "button",
+              iconName: "settings",
+              ariaLabel: "Settings",
+              title: "Settings",
+              onClick: () => setSettingsOpen(true),
+            },
+            {
               type: "button",
               text: region,
               iconName: "map",
