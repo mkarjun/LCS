@@ -24,7 +24,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <quarkus.platform.version>3.36.3</quarkus.platform.version>
         <jackson.version>2.21.4</jackson.version>
-        <apicurio.version>2.6.13.Final</apicurio.version>
+        <apicurio.version>3.3.0</apicurio.version>
         <wire.version>6.3.0</wire.version>
     </properties>
 
