@@ -156,7 +156,20 @@ function reconnectingSession(sessionId: string): TerminalSession {
 function simulatedSession(): TerminalSession {
   const outputCbs: ((data: string) => void)[] = [];
   const stateCbs: ((state: SessionState, message?: string) => void)[] = [];
-  const out = (s: string) => outputCbs.forEach((cb) => cb(s));
+  // Buffer output and the current state, then replay them to each listener as it
+  // registers. This makes the boot banner deterministic regardless of when the terminal
+  // attaches its callbacks — including React StrictMode's mount/unmount/mount — instead of
+  // racing a setTimeout.
+  const outLog: string[] = [];
+  let currentState: SessionState = "connecting";
+  const out = (s: string) => {
+    outLog.push(s);
+    outputCbs.forEach((cb) => cb(s));
+  };
+  const emitState = (state: SessionState, message?: string) => {
+    currentState = state;
+    stateCbs.forEach((cb) => cb(state, message));
+  };
   const PROMPT = "\x1b[32m[cloudshell-user@lcs\x1b[0m ~]$ ";
 
   let line = "";
@@ -212,16 +225,21 @@ function simulatedSession(): TerminalSession {
     }
   };
 
-  // Defer so listeners registered right after open() receive the banner.
-  setTimeout(() => {
-    stateCbs.forEach((cb) => cb("ready"));
-    out(banner);
-    out(PROMPT);
-  }, 0);
+  // Boot synchronously into the buffer; listeners replay it on registration.
+  emitState("ready");
+  out(banner);
+  out(PROMPT);
 
   return {
-    onOutput: (cb) => outputCbs.push(cb),
-    onState: (cb) => stateCbs.push(cb),
+    // Replay buffered output/state so a listener attaching after boot still sees it.
+    onOutput: (cb) => {
+      outputCbs.push(cb);
+      outLog.forEach((s) => cb(s));
+    },
+    onState: (cb) => {
+      stateCbs.push(cb);
+      cb(currentState);
+    },
     send: (data) => {
       // Up/Down arrows recall command history, redrawing the current line.
       if (data === "\x1b[A" || data === "\x1b[B") {
@@ -265,6 +283,6 @@ function simulatedSession(): TerminalSession {
       }
     },
     resize: () => undefined,
-    close: () => stateCbs.forEach((cb) => cb("closed")),
+    close: () => emitState("closed"),
   };
 }

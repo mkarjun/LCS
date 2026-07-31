@@ -31,6 +31,11 @@ export const XtermView = forwardRef<
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef<TerminalSession | null>(null);
+  // `onState` is recreated by the parent every render; hold the latest in a ref so the
+  // terminal effect can stay keyed only on the session and not re-init on every render
+  // (which otherwise loops: init → setState → re-render → new onState → init …).
+  const onStateRef = useRef(onState);
+  onStateRef.current = onState;
 
   useImperativeHandle(ref, () => ({
     paste: (text) => sessionRef.current?.send(text),
@@ -76,7 +81,7 @@ export const XtermView = forwardRef<
     const session = openSession(sessionId, { probeSim: useSim });
     sessionRef.current = session;
     session.onOutput((data) => term.write(data));
-    session.onState((state, message) => onState(state, message));
+    session.onState((state, message) => onStateRef.current(state, message));
 
     // Keystrokes → session. Copy on Ctrl/Cmd+C when text is selected (else pass through
     // as ^C / SIGINT), matching terminal conventions.
@@ -111,7 +116,9 @@ export const XtermView = forwardRef<
       term.dispose();
       termRef.current = null;
     };
-  }, [sessionId, useSim, onState]);
+    // Keyed only on the session identity — onState is read through a ref, so a new parent
+    // render does not tear down and recreate the terminal.
+  }, [sessionId, useSim]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 });
