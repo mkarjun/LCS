@@ -80,6 +80,14 @@ export function AppShell() {
           search={<ServiceSearch />}
           utilities={[
             {
+              // AWS's CloudShell launch icon. Opens the full-page terminal.
+              type: "button",
+              iconName: "script",
+              ariaLabel: "CloudShell",
+              title: "CloudShell",
+              onClick: () => navigate("/cloudshell"),
+            },
+            {
               // AWS's help menu. Points at real destinations inside the console rather than
               // external docs (LCS has no public docs URL yet).
               type: "menu-dropdown",
