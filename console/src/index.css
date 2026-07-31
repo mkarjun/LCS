@@ -15,3 +15,13 @@ body,
 body {
   background-color: var(--color-background-layout-main, #ffffff);
 }
+
+/*
+ * Cloudscape centers the TopNavigation search in its flex slot. AWS sits it left of
+ * center, so pull the slot toward the identity: cap its width and let the right margin
+ * absorb the slack. Substring selector because Cloudscape class names carry a build hash.
+ */
+#lcs-top-navigation [class*="awsui_search"] {
+  margin-inline: 0 auto;
+  max-width: 620px;
+}
