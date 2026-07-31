@@ -1,47 +1,45 @@
+<h1 align="center">LCS — Local Cloud Services</h1>
+
 <p align="center">
-  <img src="docs/assets/floci-black.svg#gh-light-mode-only" alt="Floci" width="500" />
-  <img src="docs/assets/floci-white.svg#gh-dark-mode-only" alt="Floci" width="500" />
+  <strong>A free, local AWS emulator for development, testing, and CI.</strong><br />
+  No account. No auth token. No feature gates. Just point your tools at <code>localhost:4566</code>.
 </p>
 
 <p align="center">
-  <strong>Light, fluffy, and always free</strong><br />
-  No account. No auth token. No feature gates. Just <code>docker compose up</code>.
-</p>
-
-<p align="center">
-  <a href="https://github.com/floci-io/floci/releases/latest"><img src="https://img.shields.io/github/v/release/floci-io/floci?label=latest%20release&color=blue" alt="Latest Release"></a>
-  <a href="https://github.com/floci-io/floci/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/floci-io/floci/release.yml?label=build" alt="Build Status"></a>
-  <a href="https://hub.docker.com/r/floci/floci"><img src="https://img.shields.io/docker/pulls/floci/floci?label=docker%20pulls" alt="Docker Pulls"></a>
-  <a href="https://hub.docker.com/r/floci/floci"><img src="https://img.shields.io/docker/image-size/floci/floci/latest?label=image%20size" alt="Docker Image Size"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
-  <a href="https://github.com/floci-io/floci/stargazers"><img src="https://img.shields.io/github/stars/floci-io/floci?style=flat" alt="GitHub Stars"></a>
 </p>
 
 <p align="center">
+  <a href="#install">Install</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#features">Features</a> ·
   <a href="#supported-services">Services</a> ·
   <a href="#sdk-integration">SDKs</a> ·
-  <a href="#testcontainers">Testcontainers</a> ·
-  <a href="#migrating-from-localstack">Migration</a> ·
-  <a href="https://floci.io/floci/">Docs</a>
+  <a href="#the-console">Console</a> ·
+  <a href="#migrating-from-localstack">Migration</a>
 </p>
 
 ---
 
 ## What is LCS?
 
-LCS is a free, open-source local AWS emulator for development, testing, and CI.
+LCS (Local Cloud Services) is a free, open-source local AWS emulator for development,
+testing, and CI. It gives you AWS-shaped services on your machine without a cloud account,
+an auth token, or paid feature gates. Point your AWS SDK, CLI, Terraform, CDK, OpenTofu, or
+test suite at `http://localhost:4566` and keep your existing workflows.
 
-LCS is built from the Floci codebase and continues as an MIT-licensed derivative with preserved upstream attribution.
+LCS is built on the Floci codebase and continues as an MIT-licensed derivative with
+upstream attribution preserved (see [License](#license)). It is growing into its own
+product — a full AWS-replica console, and its own execution work over time.
 
-It gives you AWS-shaped services on your machine without requiring a cloud account, an auth token, or paid feature gates. Point your AWS SDK, CLI, Terraform, CDK, OpenTofu, or test suite at `http://localhost:4566` and keep your existing workflows.
-
-LCS stands for Local Cloud Services.
+> **Repository note.** Some Docker image references below use `lcs/lcs`, the tag the
+> installers build locally. Where an absolute repository, docs, or registry URL would
+> normally appear, this README intentionally omits it until the project's public home is
+> set — nothing here points at an upstream repository as though it were this project's.
 
 ## Install
 
-Installers that set up everything, including Docker if it is missing, and start LCS.
+Installers set up everything, including Docker if it is missing, and start LCS.
 
 ### Windows
 
@@ -52,10 +50,6 @@ needed, puts the `lcs` command on your PATH, adds Start Menu and Desktop shortcu
 starts the emulator. Requires Windows 10 version 2004 (build 19041) or newer, x64 or arm64.
 Docker Desktop is fetched from Docker Inc and verified against their code-signing
 certificate before it runs; only that step asks for administrator rights.
-
-The ten minutes that takes are not spent staring at a progress bar: the installer runs a
-slideshow beside the live step list, and by the time it finishes you know how to point the
-AWS CLI at it, where the console lives, and what survives a restart.
 
 ```powershell
 # Unattended, e.g. for provisioning
@@ -80,15 +74,7 @@ Fedora, RHEL, CentOS, openSUSE, and Arch.
 ./install-lcs.sh --yes
 ```
 
-Native packages are also available. They install the same launcher but *declare* Docker as
-a dependency rather than installing it, so apt and dnf resolve and remove it normally:
-
-```bash
-sudo apt install ./lcs_0.1.0-1_all.deb
-sudo dnf install ./lcs-0.1.0-1.noarch.rpm
-```
-
-Build both with `tools/linux/build-packages.sh`.
+Build packages with `tools/linux/build-packages.sh`.
 
 ### The `lcs` command
 
@@ -121,19 +107,26 @@ Without persistence enabled, resources live in memory and a restart starts empty
 
 ## Quick Start
 
-Already have Docker and just want the container? The official
-[CLI](https://github.com/floci-io/floci-cli) is the shortest path:
+Already have Docker and just want the container?
 
 ```bash
-floci start
+docker run -d --name lcs \
+  -p 4566:4566 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -u root \
+  lcs/lcs:latest
 ```
 
-Open `http://localhost:4566` in a browser for the dashboard.
+The Docker socket is needed for the container-backed services (Lambda, RDS, ECS, EC2, and
+others). Open `http://localhost:4566/_lcs/ui/` for the console.
 
-Export the AWS environment variables:
+Configure your AWS environment:
 
 ```bash
-eval $(floci env)
+export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
 ```
 
 Use your existing AWS tools normally:
@@ -150,60 +143,42 @@ aws dynamodb create-table \
 aws dynamodb list-tables
 ```
 
-### Watch it run
-
-This short demo shows the CLI flow: start LCS, export the local AWS environment, run standard AWS CLI commands, and stop the emulator.
-
-https://github.com/user-attachments/assets/b55714dc-ef36-40ae-a734-cd2cadc288a8
-
-All AWS services are available at `http://localhost:4566`. Any region works. Credentials can be any non-empty values unless you explicitly enable stricter service-specific auth checks.
+All services are available at `http://localhost:4566`. Any region works. Credentials can be
+any non-empty values unless you explicitly enable stricter service-specific auth checks.
 
 <details>
 <summary>Prefer Docker Compose?</summary>
 
-Create a `compose.yaml` file:
-
 ```yaml
 services:
-  floci:
-    image: floci/floci:latest
+  lcs:
+    image: lcs/lcs:latest
     ports:
       - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 ```
-
-Start LCS:
 
 ```bash
 docker compose up
 ```
 
-Then configure your AWS environment manually:
-
-```bash
-export AWS_ENDPOINT_URL=http://localhost:4566
-export AWS_DEFAULT_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
-```
-
 </details>
 
-<details>
-<summary>Using the old <code>hectorvent/floci</code> image?</summary>
+## The Console
 
-Update your image name:
+LCS ships a browser console that talks to the emulator through the AWS SDK for JavaScript —
+the same way the real AWS console talks to AWS — served at:
 
-```yaml
-# Before
-image: hectorvent/floci:latest
-
-# After
-image: floci/floci:latest
+```
+http://localhost:4566/_lcs/ui/
 ```
 
-The old `hectorvent/floci` repository no longer receives updates.
-
-</details>
+Every console action is a real signed AWS API call over the wire, so if a screen works the
+SDK path works. Core services (S3, EC2, IAM, Lambda, DynamoDB, SQS, SNS, CloudWatch Logs,
+RDS, CloudFormation) have AWS-replica surfaces — inventory, detail, and create/edit/delete
+flows, including an in-browser Lambda code editor that deploys through `UpdateFunctionCode`.
+Every other service is reachable, with API/CLI access available for all of them.
 
 ## Features
 
@@ -242,18 +217,18 @@ Choose from in-memory, persistent, hybrid, and write-ahead log storage depending
 
 </details>
 
-## Why Floci?
+## Why LCS?
 
-LocalStack's community edition [sunset in March 2026](https://blog.localstack.cloud/the-road-ahead-for-localstack/), requiring auth tokens and freezing security updates. Floci is the no-strings-attached alternative.
+LocalStack's community edition [sunset in March 2026](https://blog.localstack.cloud/the-road-ahead-for-localstack/), requiring auth tokens and freezing security updates. LCS is the no-strings-attached alternative.
 
-| Capability | Floci | LocalStack Community |
+| Capability | LCS | LocalStack Community |
 |---|:---:|:---:|
 | Auth token required | No | Yes |
 | Security updates | Yes | Frozen |
 | Startup time | ~24 ms | ~3.3 s |
 | Idle memory | ~13 MiB | ~143 MiB |
 | Docker image size | ~90 MB | ~1.0 GB |
-| License | MIT with preserved upstream Floci attribution | Restricted |
+| License | MIT | Restricted |
 | API Gateway v2 / HTTP API | Yes | No |
 | Cognito | Yes | No |
 | RDS, ElastiCache, MSK | Real Docker | No |
@@ -263,15 +238,15 @@ LocalStack's community edition [sunset in March 2026](https://blog.localstack.cl
 | CodeBuild | Real Docker execution | No |
 | Native binary | ~40 MB | No |
 
-**69 AWS services. Broad coverage. Free forever.**
+**Broad coverage. Free forever.**
 
 ## Architecture Overview
 
 ```mermaid
 flowchart LR
-    Client["AWS SDK / CLI"]
+    Client["AWS SDK / CLI / Console"]
 
-    subgraph Floci ["Floci, port 4566"]
+    subgraph LCS ["LCS, port 4566"]
         Router["HTTP Router\nJAX-RS / Vert.x"]
 
         subgraph Stateless ["Stateless Services"]
@@ -284,7 +259,7 @@ flowchart LR
 
         subgraph Containers ["Container Services"]
             C["Lambda\nElastiCache\nRDS\nNeptune\nECS\nEC2\nMSK\nEKS\nOpenSearch\nCodeBuild"]
-            D["Athena -> floci-duck\nDuckDB sidecar"]
+            D["Athena -> DuckDB sidecar"]
         end
 
         Router --> Stateless
@@ -300,7 +275,7 @@ flowchart LR
 
 ## Supported Services
 
-Floci supports local emulation for application services, data services, eventing, identity, infrastructure, billing, and container-backed workloads.
+LCS supports local emulation for application services, data services, eventing, identity, infrastructure, billing, and container-backed workloads.
 
 | Category | Services |
 |---|---|
@@ -314,8 +289,6 @@ Floci supports local emulation for application services, data services, eventing
 | Security and governance | WAF v2, CloudTrail, CloudFront, Resource Groups Tagging API |
 | Cost and billing | Pricing, Cost Explorer, Cost and Usage Reports, BCM Data Exports |
 | Backup and config | AWS Backup, AWS Config, AppConfig, AppConfigData, CloudFormation, Cloud Control API |
-
-For operation-level compatibility, see the [Services Overview](https://floci.io/floci/services/).
 
 <details>
 <summary>Detailed service notes</summary>
@@ -348,7 +321,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | MemoryDB | Real Docker | Redis / Valkey protocol via real containers; JSON 1.1 control plane; reuses ElastiCache RESP proxy |
 | RDS | Real Docker | PostgreSQL, MySQL, MariaDB, IAM auth, JDBC-compatible engines |
 | RDS Data API | REST JSON over real RDS containers | Raw SQL execution and transactions for local MySQL / MariaDB RDS resources |
-| Neptune | Real Docker | Graph DB via TinkerPop Gremlin Server (default) or Neo4j for openCypher/Bolt (`NEPTUNE_DB_TYPE`); RDS-shaped control plane; SigV4 proxy on port 8182 |
+| Neptune | Real Docker | Graph DB via TinkerPop Gremlin Server (default) or Neo4j for openCypher/Bolt; RDS-shaped control plane; SigV4 proxy on port 8182 |
 | DocumentDB | Real Docker, mock mode available | MongoDB-compatible cluster via real MongoDB containers; RDS-shaped control plane; MongoDB wire protocol on port 27017 |
 | MSK | Real Docker | Kafka-compatible broker via Redpanda |
 | Amazon MQ | Real Docker | RabbitMQ broker via rabbitmq:3-management; AMQP + management console |
@@ -377,24 +350,24 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Elastic Beanstalk | In-process | Applications, application versions, environments, configuration templates, platform and solution stack metadata |
 | AWS Backup | In-process | Vaults, backup plans, selections, simulated job lifecycle, recovery points |
 | AWS Config | In-process | Config rules, configuration recorders, delivery channels, conformance packs, tagging |
-| CloudTrail | In-process | Trails, event selectors (S3 data events with bucket/prefix matching), `StartLogging`/`StopLogging`, scheduled gzipped log file emission to the destination bucket at AWS-shaped key paths, IAM-deny path emits `AccessDenied` records |
+| CloudTrail | In-process | Trails, event selectors, `StartLogging`/`StopLogging`, scheduled gzipped log file emission, IAM-deny path emits `AccessDenied` records |
 | CloudFront | In-process | Distributions, origins, cache behaviors, invalidations, tagging |
-| WAF v2 | In-process | Web ACLs, IP sets, regex pattern sets, rule groups, logging configs, resource associations, tagging (REGIONAL and CLOUDFRONT scopes) |
+| WAF v2 | In-process | Web ACLs, IP sets, regex pattern sets, rule groups, logging configs, resource associations, tagging |
 | Route53 | In-process | Hosted zones, SOA and NS records, resource record sets, change tracking, tagging |
 | Cloud Map | In-process | HTTP and DNS namespaces, services, instance registration, discovery queries, operations, tagging |
 | Transfer Family | In-process | Server lifecycle, user management, SSH key import, tagging |
 | Textract | In-process stub | API-compatible stubs, dummy block data, async job simulation |
-| Transcribe | In-process stub | Transcription jobs and custom vocabularies; jobs complete immediately, no real audio processing |
+| Transcribe | In-process stub | Transcription jobs and custom vocabularies; jobs complete immediately |
 | Pricing | In-process with static snapshot | Product discovery, attributes, price list files, pagination |
-| Cost Explorer | In-process | Cost synthesized from Floci resource state and pricing snapshots |
-| Cost and Usage Reports | In-process with floci-duck sidecar | CUR 2.0 and FOCUS 1.2 columns, account-scoped storage, Parquet emission |
+| Cost Explorer | In-process | Cost synthesized from resource state and pricing snapshots |
+| Cost and Usage Reports | In-process with DuckDB sidecar | CUR 2.0 and FOCUS 1.2 columns, account-scoped storage, Parquet emission |
 | BCM Data Exports | In-process | Export lifecycle, executions, update and delete operations |
 
 </details>
 
 ## Real Docker Integration
 
-Floci uses real Docker containers when in-process emulation would reduce fidelity. This applies to stateful databases, connection-heavy protocols, runtimes, and build systems.
+LCS uses real Docker containers when in-process emulation would reduce fidelity. This applies to stateful databases, connection-heavy protocols, runtimes, and build systems.
 
 | Service | Default image | What is real |
 |---|---|---|
@@ -404,7 +377,6 @@ Floci uses real Docker containers when in-process emulation would reduce fidelit
 | RDS MySQL / Aurora | `mysql:8.0` | MySQL engine, IAM auth, JDBC-compatible access |
 | RDS MariaDB | `mariadb:11` | MariaDB engine, IAM auth, JDBC-compatible access |
 | Neptune | `tinkerpop/gremlin-server:3.7.3` | TinkerPop Gremlin Server; Gremlin WebSocket on port 8182; SigV4 auth proxy |
-| Neptune (openCypher) | `neo4j:5-community` | Neo4j backend when `FLOCI_SERVICES_NEPTUNE_DB_TYPE=neo4j`; openCypher over Bolt |
 | DocumentDB | `mongo:7.0` | MongoDB engine; MongoDB wire protocol on port 27017 |
 | MSK | `redpandadata/redpanda:latest` | Kafka-compatible broker via Redpanda |
 | Amazon MQ | `rabbitmq:3-management` | RabbitMQ broker; AMQP on port 5672, management console on 15672 |
@@ -415,62 +387,29 @@ Floci uses real Docker containers when in-process emulation would reduce fidelit
 | OpenSearch | `opensearchproject/opensearch:2` | Full OpenSearch engine with REST API |
 | ECR | `registry:2` | OCI-compatible registry for docker push and docker pull |
 
-Docker-backed services require the Docker socket:
-
-```bash
-docker run -d --name floci \
-  -p 4566:4566 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -u root \
-  floci/floci:latest
-```
-
-### Overriding default images
-
-| Variable | Default |
-|---|---|
-| `FLOCI_SERVICES_ELASTICACHE_DEFAULT_IMAGE` | `valkey/valkey:8` |
-| `FLOCI_SERVICES_RDS_DEFAULT_POSTGRES_IMAGE` | `postgres:16-alpine` |
-| `FLOCI_SERVICES_RDS_DEFAULT_MYSQL_IMAGE` | `mysql:8.0` |
-| `FLOCI_SERVICES_RDS_DEFAULT_MARIADB_IMAGE` | `mariadb:11` |
-| `FLOCI_SERVICES_MSK_DEFAULT_IMAGE` | `redpandadata/redpanda:latest` |
-| `FLOCI_SERVICES_OPENSEARCH_DEFAULT_IMAGE` | `opensearchproject/opensearch:2` |
-| `FLOCI_SERVICES_NEPTUNE_DEFAULT_IMAGE` | `tinkerpop/gremlin-server:3.7.3` |
-| `FLOCI_SERVICES_NEPTUNE_DEFAULT_NEO4J_IMAGE` | `neo4j:5-community` |
-| `FLOCI_SERVICES_DOCDB_DEFAULT_IMAGE` | `mongo:7.0` |
-| `FLOCI_SERVICES_EKS_DEFAULT_IMAGE` | `rancher/k3s:latest` |
-| `FLOCI_SERVICES_ECR_REGISTRY_IMAGE` | `registry:2` |
-| `FLOCI_ECR_BASE_URI` | `public.ecr.aws` |
+Docker-backed services require the Docker socket, as shown in [Quick Start](#quick-start).
 
 ## Persistence and Storage Modes
 
-Floci can trade speed for durability depending on the workflow. Configure the default mode with `FLOCI_STORAGE_MODE`, or override storage per service.
+LCS can trade speed for durability depending on the workflow. Configure the default mode with `FLOCI_STORAGE_MODE`, or override storage per service.
 
 | Mode | Behavior | Best for | Durability |
 |---|---|---|:---:|
 | `memory` | Entirely in RAM. Data is lost when the container stops. | CI and ephemeral tests | None |
-| `persistent` | Loaded at startup and flushed to disk immediately on every write operation. | Simple local state preservation with immediate persistence | Medium |
+| `persistent` | Loaded at startup and flushed to disk immediately on every write. | Simple local state preservation | Medium |
 | `hybrid` | In-memory performance with periodic async flushing every 5 seconds. | Local development | Good |
 | `wal` | Write-ahead log. Every mutation is logged before responding. | Maximum durability | Highest |
 
-Use `memory` for fast test runs. Use `hybrid` when you want state preserved across container restarts without much overhead.
-
-For more detail, see the [Storage Configuration documentation](https://floci.io/floci/configuration/storage/).
-
 ## Multi-Account Isolation
 
-Floci supports per-account resource isolation with no extra setup. If `AWS_ACCESS_KEY_ID` is exactly 12 digits, Floci uses it as the account ID. Resources created by one account are invisible to another.
+LCS supports per-account resource isolation with no extra setup. If `AWS_ACCESS_KEY_ID` is exactly 12 digits, LCS uses it as the account ID. Resources created by one account are invisible to another.
 
 ```bash
 AWS_ACCESS_KEY_ID=111111111111 aws sqs create-queue --queue-name orders
 AWS_ACCESS_KEY_ID=222222222222 aws sqs create-queue --queue-name orders
 ```
 
-Any other key format, such as `test` or `AKIA...`, causes Floci to fall back to `FLOCI_DEFAULT_ACCOUNT_ID`, which defaults to `000000000000`.
-
-STS temporary credentials are routed too: credentials from `AssumeRole` resolve to the assumed role's account, so the cross-account assume-role-then-provision pattern works locally. Resolution precedence is 12-digit AKID → temporary-session lookup → `FLOCI_DEFAULT_ACCOUNT_ID`.
-
-See the [Multi-Account Isolation docs](https://floci.io/floci/configuration/multi-account/).
+Any other key format falls back to `FLOCI_DEFAULT_ACCOUNT_ID`, which defaults to `000000000000`. STS temporary credentials from `AssumeRole` resolve to the assumed role's account, so the cross-account assume-role-then-provision pattern works locally.
 
 ## SDK Integration
 
@@ -514,15 +453,8 @@ client = boto3.client(
     aws_secret_access_key="test",
 )
 
-client.put_parameter(
-    Name="/demo/app/message",
-    Value="hello from floci",
-    Type="String",
-    Overwrite=True,
-)
-
-response = client.get_parameter(Name="/demo/app/message")
-print(response["Parameter"]["Value"])
+client.put_parameter(Name="/demo/app/message", Value="hello from lcs", Type="String", Overwrite=True)
+print(client.get_parameter(Name="/demo/app/message")["Parameter"]["Value"])
 ```
 
 </details>
@@ -542,83 +474,9 @@ const client = new SQSClient({
 await client.send(
   new SendMessageCommand({
     QueueUrl: "http://localhost:4566/000000000000/demo-queue",
-    MessageBody: "hello from floci",
+    MessageBody: "hello from lcs",
   }),
 );
-```
-
-</details>
-
-<details>
-<summary><strong>Go, AWS SDK v2</strong></summary>
-
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "log"
-
-    "github.com/aws/aws-sdk-go-v2/config"
-    "github.com/aws/aws-sdk-go-v2/credentials"
-    "github.com/aws/aws-sdk-go-v2/service/s3"
-)
-
-func main() {
-    cfg, err := config.LoadDefaultConfig(context.TODO(),
-        config.WithRegion("us-east-1"),
-        config.WithCredentialsProvider(
-            credentials.NewStaticCredentialsProvider("test", "test", ""),
-        ),
-        config.WithBaseEndpoint("http://localhost:4566"),
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-        o.UsePathStyle = true
-    })
-
-    out, err := client.ListBuckets(context.TODO(), nil)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    fmt.Println(out.Buckets)
-}
-```
-
-</details>
-
-<details>
-<summary><strong>Rust, AWS SDK</strong></summary>
-
-```rust
-use aws_sdk_secretsmanager::config::{Credentials, Region};
-use aws_sdk_secretsmanager::Client;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .region(Region::new("us-east-1"))
-        .credentials_provider(Credentials::new("test", "test", None, None, "floci"))
-        .endpoint_url("http://localhost:4566")
-        .load()
-        .await;
-
-    let client = Client::new(&config);
-
-    client
-        .create_secret()
-        .name("demo/secret")
-        .secret_string("hello from floci")
-        .send()
-        .await?;
-
-    Ok(())
-}
 ```
 
 </details>
@@ -637,156 +495,38 @@ aws --endpoint-url http://localhost:4566 s3 ls
 
 </details>
 
-## Testcontainers
-
-Floci has Testcontainers modules for starting isolated Floci instances directly from tests. This avoids shared state, manual daemon setup, and port conflicts.
-
-| Language | Package | Latest | Registry | Source |
-|---|---|---|---|---|
-| Java | `io.floci:testcontainers-floci` | `1.4.0` | [Maven Central](https://mvnrepository.com/artifact/io.floci/testcontainers-floci) | [GitHub](https://github.com/floci-io/testcontainers-floci) |
-| Node.js | `@floci/testcontainers` | `0.1.0` | [npm](https://www.npmjs.com/package/@floci/testcontainers) | [GitHub](https://github.com/floci-io/testcontainers-floci-node) |
-| Python | `testcontainers-floci` | `0.1.1` | [PyPI](https://pypi.org/project/testcontainers-floci/) | [GitHub](https://github.com/floci-io/testcontainers-floci-python) |
-| Go | In progress | In progress | N/A | [GitHub](https://github.com/floci-io/testcontainers-floci-go) |
-
-<details>
-<summary><strong>Java</strong></summary>
-
-```xml
-<dependency>
-    <groupId>io.floci</groupId>
-    <artifactId>testcontainers-floci</artifactId>
-    <version>1.4.0</version>
-    <scope>test</scope>
-</dependency>
-```
-
-```java
-@Testcontainers
-class S3IntegrationTest {
-
-    @Container
-    static FlociContainer floci = new FlociContainer();
-
-    @Test
-    void shouldCreateBucket() {
-        S3Client s3 = S3Client.builder()
-                .endpointOverride(URI.create(floci.getEndpoint()))
-                .region(Region.of(floci.getRegion()))
-                .credentialsProvider(StaticCredentialsProvider.create(
-                        AwsBasicCredentials.create(floci.getAccessKey(), floci.getSecretKey())))
-                .forcePathStyle(true)
-                .build();
-
-        s3.createBucket(b -> b.bucket("my-bucket"));
-    }
-}
-```
-
-For Testcontainers 2.x / Spring Boot 4.x, use version `2.5.0`.
-
-</details>
-
-<details>
-<summary><strong>Node.js / TypeScript</strong></summary>
-
-```sh
-npm install --save-dev @floci/testcontainers
-```
-
-```ts
-import { FlociContainer } from "@floci/testcontainers";
-import { S3Client, CreateBucketCommand } from "@aws-sdk/client-s3";
-
-describe("S3", () => {
-  let floci: FlociContainer;
-
-  beforeAll(async () => {
-    floci = await new FlociContainer().start();
-  });
-
-  afterAll(async () => {
-    await floci.stop();
-  });
-
-  it("creates a bucket", async () => {
-    const s3 = new S3Client({
-      endpoint: floci.getEndpoint(),
-      region: floci.getRegion(),
-      credentials: {
-        accessKeyId: floci.getAccessKey(),
-        secretAccessKey: floci.getSecretKey(),
-      },
-      forcePathStyle: true,
-    });
-
-    await s3.send(new CreateBucketCommand({ Bucket: "my-bucket" }));
-  });
-});
-```
-
-</details>
-
-<details>
-<summary><strong>Python</strong></summary>
-
-```sh
-pip install testcontainers-floci
-```
-
-```python
-import boto3
-from testcontainers_floci import FlociContainer
-
-
-def test_s3_create_bucket():
-    with FlociContainer() as floci:
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=floci.get_endpoint(),
-            region_name=floci.get_region(),
-            aws_access_key_id=floci.get_access_key(),
-            aws_secret_access_key=floci.get_secret_key(),
-        )
-        s3.create_bucket(Bucket="my-bucket")
-```
-
-</details>
-
 ## Compatibility Testing
 
-The [`compatibility-tests`](./compatibility-tests/) directory validates Floci across SDKs and tooling workflows.
+The [`compatibility-tests`](./compatibility-tests/) directory validates LCS across SDKs and tooling workflows.
 
-| Module | Language / Tool | SDK / Client | Tests |
-|---|---|---|---:|
-| `sdk-test-java` | Java 17 | AWS SDK for Java v2 | 1,326 |
-| `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 | 449 |
-| `sdk-test-python` | Python 3 | boto3 | 311 |
-| `sdk-test-go` | Go | AWS SDK for Go v2 + RDS Data API SDK v1 | 157 |
-| `sdk-test-awscli` | Bash | AWS CLI v2 | 205 |
-| `compat-terraform` | Terraform | v1.10+ | 22 |
-| `compat-opentofu` | OpenTofu | v1.9+ | 16 |
-| `compat-cdk` | AWS CDK | v2+ | 20 |
+| Module | Language / Tool | SDK / Client |
+|---|---|---|
+| `sdk-test-java` | Java | AWS SDK for Java v2 |
+| `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 |
+| `sdk-test-python` | Python 3 | boto3 |
+| `sdk-test-go` | Go | AWS SDK for Go v2 + RDS Data API SDK v1 |
+| `sdk-test-awscli` | Bash | AWS CLI v2 |
+| `compat-terraform` | Terraform | v1.10+ |
+| `compat-opentofu` | OpenTofu | v1.9+ |
+| `compat-cdk` | AWS CDK | v2+ |
 
-**2,506 automated compatibility tests across 5 SDKs and 3 IaC tools.**
+Thousands of automated compatibility tests run across these SDKs and IaC tools.
 
 ## Migrating from LocalStack
 
-Floci is a drop-in replacement for LocalStack Community. The port, credentials, SDK configuration, and CLI endpoint pattern work the same way. Swap the image and keep going.
+LCS is a drop-in replacement for LocalStack Community. The port, credentials, SDK configuration, and CLI endpoint pattern work the same way. Swap the image and keep going.
 
 ```yaml
 # Before
 image: localstack/localstack
 
-# After, standard image
-image: floci/floci:latest
-
-# After, if init scripts need AWS CLI or boto3
-image: floci/floci:latest-compat
+# After
+image: lcs/lcs:latest
 ```
 
 LocalStack environment variables are translated automatically:
 
-| LocalStack | Floci equivalent |
+| LocalStack | LCS equivalent |
 |---|---|
 | `LOCALSTACK_HOST` | `FLOCI_HOSTNAME` |
 | `PERSISTENCE=1` | `FLOCI_STORAGE_MODE=persistent` |
@@ -794,129 +534,55 @@ LocalStack environment variables are translated automatically:
 | `LAMBDA_REMOVE_CONTAINERS=1` | `FLOCI_SERVICES_LAMBDA_EPHEMERAL=true` |
 | `DEBUG=1` | `QUARKUS_LOG_LEVEL=DEBUG` |
 
-Init scripts mounted under `/etc/localstack/init/` run unchanged. The `/_localstack/init` and `/_localstack/health` endpoints are still served. Once the emulator is up, the log also ends with a LocalStack-style `Ready.` line, so tooling that watches the log for it — such as the default wait strategy of Testcontainers' `LocalStackContainer` — works unchanged. Set `LOCALSTACK_PARITY=false` to opt out of automatic translation.
-
-See the [full migration guide](https://floci.io/floci/getting-started/migrate-from-localstack/).
-
-## Image Tags
-
-Every tag combines a variant and a channel.
-
-| Channel | Standard | Compat with AWS CLI and boto3 |
-|---|---|---|
-| Release, floating | `latest` | `latest-compat` |
-| Release, pinned | `x.y.z` | `x.y.z-compat` |
-| Nightly, floating | `nightly` | `nightly-compat` |
-| Nightly, dated | `nightly-mmddyyyy` | `nightly-mmddyyyy-compat` |
-
-Use `latest` for stable releases, a pinned version for reproducible builds, and `nightly` to track `main`.
-
-```yaml
-# Recommended
-image: floci/floci:latest
-
-# Includes AWS CLI and boto3
-image: floci/floci:latest-compat
-
-# Pinned release
-image: floci/floci:1.5.11
-
-# Track main
-image: floci/floci:nightly
-```
+Init scripts mounted under `/etc/localstack/init/` run unchanged. The `/_localstack/init` and `/_localstack/health` endpoints are still served, and the log ends with a LocalStack-style `Ready.` line so existing wait strategies work. Set `LOCALSTACK_PARITY=false` to opt out.
 
 ## Configuration
 
-All settings are overridable through environment variables with the `FLOCI_` prefix.
+Settings are overridable through environment variables.
+
+> **Environment-variable prefix.** Configuration keys currently use the `FLOCI_` prefix,
+> inherited from the upstream codebase. The runtime rename to an LCS-native prefix is a
+> planned, separate change; until then these names are what the running image reads, so
+> they are documented verbatim.
 
 | Variable | Default | Description |
 |---|---|---|
-| `FLOCI_PORT` | `4566` | Port exposed by the Floci API |
+| `FLOCI_PORT` | `4566` | Port exposed by the LCS API |
 | `FLOCI_DEFAULT_REGION` | `us-east-1` | Default AWS region |
 | `FLOCI_DEFAULT_ACCOUNT_ID` | `000000000000` | Default AWS account ID |
-| `FLOCI_BASE_URL` | `http://localhost:4566` | Base URL used when Floci returns service URLs |
-| `FLOCI_HOSTNAME` | Unset | Hostname used in returned URLs when Floci runs inside Docker Compose |
+| `FLOCI_BASE_URL` | `http://localhost:4566` | Base URL used when LCS returns service URLs |
+| `FLOCI_HOSTNAME` | Unset | Hostname used in returned URLs when LCS runs inside Docker Compose |
 | `FLOCI_STORAGE_MODE` | `memory` | Storage mode: `memory`, `persistent`, `hybrid`, or `wal` |
 | `FLOCI_STORAGE_PERSISTENT_PATH` | `./data` | Directory used for persisted state |
+| `FLOCI_TLS_ENABLED` | `false` | Serve over HTTPS (self-signed); pair with `NODE_TLS_REJECT_UNAUTHORIZED=0` for the JS SDK |
 | `FLOCI_ECR_BASE_URI` | `public.ecr.aws` | ECR base URI used when pulling container images |
-| `FLOCI_SERVICES_S3_ENFORCE_AUTH` | `false` | Enforce S3 public/private read access and reject unknown signed S3 access keys |
-
-Full reference: [configuration docs](https://floci.io/floci/configuration/advanced/application-yml)
+| `FLOCI_SERVICES_S3_ENFORCE_AUTH` | `false` | Enforce S3 access checks and reject unknown signed S3 access keys |
 
 ### Multi-container Docker Compose
 
-When your application runs in a different container, set `FLOCI_HOSTNAME` to the Floci service name so returned URLs, such as SQS `QueueUrl` values, resolve correctly.
+When your application runs in a different container, set `FLOCI_HOSTNAME` to the LCS service name so returned URLs resolve correctly.
 
 ```yaml
 services:
-  floci:
-    image: floci/floci:latest
+  lcs:
+    image: lcs/lcs:latest
     ports:
       - "4566:4566"
     environment:
-      - FLOCI_HOSTNAME=floci
+      - FLOCI_HOSTNAME=lcs
 
   my-app:
     environment:
-      - AWS_ENDPOINT_URL=http://floci:4566
+      - AWS_ENDPOINT_URL=http://lcs:4566
     depends_on:
-      - floci
+      - lcs
 ```
-
-Without this, services may return URLs using `localhost`, which points to the wrong container from the application container.
-
-## Community
-
-Join the Floci community on [Slack](https://join.slack.com/t/floci/shared_invite/zt-3tjn02s3q-A00kEjJ1cZxsg_imTfy6Cw) or [GitHub Discussions](https://github.com/orgs/floci-io/discussions). Feature ideas, compatibility questions, design tradeoffs, and rough proposals are welcome.
-
-## Sponsors
-
-Floci is independent open source, funded by its users. If Floci saves you time,
-consider [sponsoring the project](https://github.com/sponsors/floci-io) — every
-tier keeps the emulators fast, light, and free.
-
-### 🥇 Gold
-
-Large logo with top placement, a dedicated support channel, input on roadmap
-priorities, and custom integration help.
-
-*Your logo here — [become a Gold sponsor](https://github.com/sponsors/floci-io).*
-
-### 🥈 Silver
-
-Logo in this README and on floci.io, priority issue support, and a mention in
-release notes.
-
-*Your logo here — [become a Silver sponsor](https://github.com/sponsors/floci-io).*
-
-### 🥉 Community
-
-Name in this README, a sponsor badge on GitHub, and our sincere thanks.
-
-- [Nexxion.ai](https://github.com/Nexxion-ai)
-- [Your name here](https://github.com/sponsors/floci-io)
-
-## Star History
-
-<p align="center">
-  <a href="https://www.star-history.com/?repos=floci-io%2Ffloci&type=date&legend=top-left">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=floci-io/floci&type=date&theme=dark&legend=top-left" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=floci-io/floci&type=date&legend=top-left" />
-      <img width="600" alt="Star History Chart" src="https://api.star-history.com/chart?repos=floci-io/floci&type=date&legend=top-left" />
-    </picture>
-  </a>
-</p>
-
-## Contributors
-
-<a href="https://github.com/floci-io/floci/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=floci-io/floci&max=100&columns=20" />
-</a>
 
 ## License
 
-MIT.
+MIT — see [LICENSE](LICENSE).
 
-LCS is built from the Floci codebase and preserves upstream attribution in
+LCS is built on the Floci codebase and preserves upstream attribution in
 [NOTICE](NOTICE) and [LICENSES/UPSTREAM-FLOCI-MIT.txt](LICENSES/UPSTREAM-FLOCI-MIT.txt).
+The MIT license requires that the original copyright notice be preserved; it is, and
+this project remains MIT-licensed.

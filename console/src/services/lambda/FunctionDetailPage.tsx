@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
+  DeleteFunctionCommand,
   GetFunctionCommand,
+  GetFunctionConcurrencyCommand,
   InvocationType,
   InvokeCommand,
   LambdaClient,
   ListAliasesCommand,
+  ListTagsCommand,
   ListVersionsByFunctionCommand,
   LogType,
+  PutFunctionConcurrencyCommand,
 } from "@aws-sdk/client-lambda";
 import type { AliasConfiguration, FunctionConfiguration } from "@aws-sdk/client-lambda";
 import {
@@ -15,16 +19,17 @@ import {
   DescribeLogStreamsCommand,
   GetLogEventsCommand,
 } from "@aws-sdk/client-cloudwatch-logs";
+import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
-import ColumnLayout from "@cloudscape-design/components/column-layout";
+import ButtonDropdown from "@cloudscape-design/components/button-dropdown";
 import Container from "@cloudscape-design/components/container";
 import ContentLayout from "@cloudscape-design/components/content-layout";
 import FormField from "@cloudscape-design/components/form-field";
 import Header from "@cloudscape-design/components/header";
+import Modal from "@cloudscape-design/components/modal";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Spinner from "@cloudscape-design/components/spinner";
-import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table from "@cloudscape-design/components/table";
 import Tabs from "@cloudscape-design/components/tabs";
 import Textarea from "@cloudscape-design/components/textarea";
@@ -32,7 +37,10 @@ import Textarea from "@cloudscape-design/components/textarea";
 import { describeAwsError, useAwsClient } from "@platform/awsClient";
 import { useBreadcrumbs } from "@shell/BreadcrumbContext";
 import { useNotifications } from "@shell/NotificationContext";
-import { dash, formatLambdaDate } from "./lambdaFormat";
+import { formatLambdaDate } from "./lambdaFormat";
+import { CodeEditor } from "./CodeEditor";
+import { FunctionOverview } from "./FunctionOverview";
+import { ConfigurationTab } from "./ConfigurationTab";
 
 interface InvokeResult {
   statusCode?: number;
@@ -46,9 +54,14 @@ export default function FunctionDetailPage() {
   const client = useAwsClient(LambdaClient);
   const logsClient = useAwsClient(CloudWatchLogsClient);
   const { notify } = useNotifications();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [config, setConfig] = useState<FunctionConfiguration | null>(null);
+  const [codeLocation, setCodeLocation] = useState<string | null>(null);
+  const [packageType, setPackageType] = useState<string | undefined>(undefined);
+  const [reservedConcurrency, setReservedConcurrency] = useState<number | null>(null);
+  const [tags, setTags] = useState<{ key: string; value: string }[]>([]);
   const [aliases, setAliases] = useState<AliasConfiguration[]>([]);
   const [versions, setVersions] = useState<FunctionConfiguration[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,7 +73,12 @@ export default function FunctionDetailPage() {
   const [logEvents, setLogEvents] = useState<string[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
 
-  const activeTab = searchParams.get("tab") ?? "configuration";
+  // Which confirm dialog is open, if any.
+  const [pending, setPending] = useState<"throttle" | "delete" | null>(null);
+  const [acting, setActing] = useState(false);
+
+  // AWS's default tab is Code.
+  const activeTab = searchParams.get("tab") ?? "code";
 
   useBreadcrumbs([
     { text: "Lambda", href: "/lambda" },
@@ -73,16 +91,30 @@ export default function FunctionDetailPage() {
     try {
       const response = await client.send(new GetFunctionCommand({ FunctionName: functionName }));
       setConfig(response.Configuration ?? null);
+      setCodeLocation(response.Code?.Location ?? null);
+      setPackageType(response.Configuration?.PackageType);
     } catch (cause) {
       const { title, detail } = describeAwsError(cause);
       notify({ type: "error", header: `Couldn't load function — ${title}`, content: detail });
       setLoading(false);
       return;
     }
-    const [aliasResult, versionResult] = await Promise.allSettled([
+    const [concurrency, tagResult, aliasResult, versionResult] = await Promise.allSettled([
+      client.send(new GetFunctionConcurrencyCommand({ FunctionName: functionName })),
+      client.send(new ListTagsCommand({ Resource: functionName })),
       client.send(new ListAliasesCommand({ FunctionName: functionName })),
       client.send(new ListVersionsByFunctionCommand({ FunctionName: functionName })),
     ]);
+    setReservedConcurrency(
+      concurrency.status === "fulfilled" && concurrency.value.ReservedConcurrentExecutions !== undefined
+        ? concurrency.value.ReservedConcurrentExecutions
+        : null,
+    );
+    setTags(
+      tagResult.status === "fulfilled"
+        ? Object.entries(tagResult.value.Tags ?? {}).map(([key, value]) => ({ key, value }))
+        : [],
+    );
     setAliases(aliasResult.status === "fulfilled" ? (aliasResult.value.Aliases ?? []) : []);
     setVersions(versionResult.status === "fulfilled" ? (versionResult.value.Versions ?? []) : []);
     setLoading(false);
@@ -92,7 +124,6 @@ export default function FunctionDetailPage() {
     void load();
   }, [load]);
 
-  /** Runs the function for real and decodes the base64 log tail AWS returns. */
   const invoke = async () => {
     setInvoking(true);
     setResult(null);
@@ -128,7 +159,6 @@ export default function FunctionDetailPage() {
     }
   };
 
-  /** Monitor tab: the log group Lambda creates on first invocation. */
   const loadLogs = useCallback(async () => {
     setLogsLoading(true);
     const logGroupName = `/aws/lambda/${functionName}`;
@@ -151,7 +181,6 @@ export default function FunctionDetailPage() {
       );
       setLogEvents((events.events ?? []).map((event) => event.message ?? ""));
     } catch {
-      // No log group yet simply means the function has never been invoked.
       setLogEvents([]);
     } finally {
       setLogsLoading(false);
@@ -164,6 +193,40 @@ export default function FunctionDetailPage() {
     }
   }, [activeTab, loadLogs]);
 
+  const copyArn = () => {
+    if (config?.FunctionArn) {
+      void navigator.clipboard.writeText(config.FunctionArn);
+      notify({ type: "success", content: "Function ARN copied." });
+    }
+  };
+
+  const runPending = async () => {
+    setActing(true);
+    try {
+      if (pending === "throttle") {
+        // AWS's "Throttle" sets reserved concurrency to 0, which stops all invocations.
+        await client.send(
+          new PutFunctionConcurrencyCommand({
+            FunctionName: functionName,
+            ReservedConcurrentExecutions: 0,
+          }),
+        );
+        notify({ type: "success", content: `Function "${functionName}" throttled (reserved concurrency 0).` });
+        setPending(null);
+        await load();
+      } else if (pending === "delete") {
+        await client.send(new DeleteFunctionCommand({ FunctionName: functionName }));
+        notify({ type: "success", content: `Function "${functionName}" deleted.` });
+        navigate("/lambda");
+      }
+    } catch (cause) {
+      const { title, detail } = describeAwsError(cause);
+      notify({ type: "error", header: `Action failed — ${title}`, content: detail });
+    } finally {
+      setActing(false);
+    }
+  };
+
   if (loading) {
     return (
       <Box textAlign="center" padding={{ vertical: "xxl" }}>
@@ -172,18 +235,6 @@ export default function FunctionDetailPage() {
     );
   }
 
-  const field = (label: string, content: React.ReactNode) => (
-    <SpaceBetween size="xxs">
-      <Box variant="awsui-key-label">{label}</Box>
-      <Box>{content}</Box>
-    </SpaceBetween>
-  );
-
-  const envVars = Object.entries(config?.Environment?.Variables ?? {}).map(([key, value]) => ({
-    key,
-    value,
-  }));
-
   return (
     <ContentLayout
       header={
@@ -191,17 +242,25 @@ export default function FunctionDetailPage() {
           variant="h1"
           actions={
             <SpaceBetween direction="horizontal" size="xs">
-              <Button iconName="refresh" ariaLabel="Refresh" onClick={() => void load()} />
-              <Button
-                variant="primary"
-                loading={invoking}
-                onClick={() => {
-                  setSearchParams({ tab: "test" });
-                  void invoke();
+              <Button onClick={() => setPending("throttle")}>Throttle</Button>
+              <Button iconName="copy" onClick={copyArn}>
+                Copy ARN
+              </Button>
+              <ButtonDropdown
+                items={[
+                  { id: "test", text: "Test" },
+                  { id: "delete", text: "Delete function" },
+                ]}
+                onItemClick={(event) => {
+                  if (event.detail.id === "delete") {
+                    setPending("delete");
+                  } else if (event.detail.id === "test") {
+                    setSearchParams({ tab: "test" });
+                  }
                 }}
               >
-                Test
-              </Button>
+                Actions
+              </ButtonDropdown>
             </SpaceBetween>
           }
         >
@@ -210,72 +269,24 @@ export default function FunctionDetailPage() {
       }
     >
       <SpaceBetween size="l">
-        <Container header={<Header variant="h2">Function overview</Header>}>
-          <ColumnLayout columns={4} variant="text-grid">
-            {field("Function ARN", dash(config?.FunctionArn))}
-            {field("Runtime", dash(config?.Runtime))}
-            {field("Handler", dash(config?.Handler))}
-            {field("Package type", dash(config?.PackageType))}
-            {field("Memory", config?.MemorySize ? `${config.MemorySize} MB` : "—")}
-            {field("Timeout", config?.Timeout ? `${config.Timeout} sec` : "—")}
-            {field("Code size", config?.CodeSize ? `${config.CodeSize} bytes` : "—")}
-            {field("Last modified", formatLambdaDate(config?.LastModified))}
-            {field(
-              "State",
-              config?.State === "Active" ? (
-                <StatusIndicator type="success">Active</StatusIndicator>
-              ) : (
-                <StatusIndicator type="pending">{dash(config?.State)}</StatusIndicator>
-              ),
-            )}
-            {field("Role", dash(config?.Role))}
-            {field("Architecture", (config?.Architectures ?? []).join(", ") || "—")}
-            {field("Version", dash(config?.Version))}
-          </ColumnLayout>
-        </Container>
+        <FunctionOverview config={config} />
 
         <Tabs
           activeTabId={activeTab}
           onChange={(event) => setSearchParams({ tab: event.detail.activeTabId })}
           tabs={[
             {
-              id: "configuration",
-              label: "Configuration",
+              id: "code",
+              label: "Code",
               content: (
-                <SpaceBetween size="l">
-                  <Container header={<Header variant="h2">General configuration</Header>}>
-                    <ColumnLayout columns={3} variant="text-grid">
-                      {field("Description", dash(config?.Description))}
-                      {field("Memory", config?.MemorySize ? `${config.MemorySize} MB` : "—")}
-                      {field("Timeout", config?.Timeout ? `${config.Timeout} sec` : "—")}
-                      {field(
-                        "Ephemeral storage",
-                        config?.EphemeralStorage?.Size ? `${config.EphemeralStorage.Size} MB` : "—",
-                      )}
-                      {field("Tracing", dash(config?.TracingConfig?.Mode))}
-                      {field("Revision ID", dash(config?.RevisionId))}
-                    </ColumnLayout>
-                  </Container>
-                  <Table
-                    variant="container"
-                    header={
-                      <Header variant="h2" counter={`(${envVars.length})`}>
-                        Environment variables
-                      </Header>
-                    }
-                    items={envVars}
-                    trackBy={(item) => item.key}
-                    columnDefinitions={[
-                      { id: "key", header: "Key", cell: (item) => item.key, isRowHeader: true },
-                      { id: "value", header: "Value", cell: (item) => item.value ?? "" },
-                    ]}
-                    empty={
-                      <Box textAlign="center" padding={{ vertical: "m" }} color="text-body-secondary">
-                        No environment variables.
-                      </Box>
-                    }
-                  />
-                </SpaceBetween>
+                <CodeEditor
+                  client={client}
+                  functionName={functionName}
+                  config={config}
+                  codeLocation={codeLocation}
+                  packageType={packageType}
+                  onDeployed={load}
+                />
               ),
             },
             {
@@ -318,7 +329,9 @@ export default function FunctionDetailPage() {
                               : `Status ${result.statusCode}`
                           }
                         >
-                          {result.functionError ? "Execution result: failed" : "Execution result: succeeded"}
+                          {result.functionError
+                            ? "Execution result: failed"
+                            : "Execution result: succeeded"}
                         </Header>
                       }
                     >
@@ -351,35 +364,56 @@ export default function FunctionDetailPage() {
               id: "monitor",
               label: "Monitor",
               content: (
-                <Container
-                  header={
-                    <Header
-                      variant="h2"
-                      description={`CloudWatch log group /aws/lambda/${functionName}`}
-                      actions={
-                        <Button iconName="refresh" ariaLabel="Refresh logs" onClick={() => void loadLogs()} />
-                      }
-                    >
-                      Recent log events
-                    </Header>
-                  }
-                >
-                  {logsLoading ? (
-                    <Box textAlign="center" padding={{ vertical: "l" }}>
-                      <Spinner />
-                    </Box>
-                  ) : logEvents.length === 0 ? (
-                    <Box textAlign="center" padding={{ vertical: "l" }} color="text-body-secondary">
-                      No log events. Logs appear after the function is invoked.
-                    </Box>
-                  ) : (
-                    <Box variant="code" display="block">
-                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowX: "auto" }}>
-                        {logEvents.join("")}
-                      </pre>
-                    </Box>
-                  )}
-                </Container>
+                <SpaceBetween size="l">
+                  <Alert type="info">
+                    CloudWatch metric graphs are not available — LCS does not produce Lambda
+                    metrics. Recent log events from the function's log group are shown instead.
+                  </Alert>
+                  <Container
+                    header={
+                      <Header
+                        variant="h2"
+                        description={`CloudWatch log group /aws/lambda/${functionName}`}
+                        actions={
+                          <Button
+                            iconName="refresh"
+                            ariaLabel="Refresh logs"
+                            onClick={() => void loadLogs()}
+                          />
+                        }
+                      >
+                        Recent log events
+                      </Header>
+                    }
+                  >
+                    {logsLoading ? (
+                      <Box textAlign="center" padding={{ vertical: "l" }}>
+                        <Spinner />
+                      </Box>
+                    ) : logEvents.length === 0 ? (
+                      <Box textAlign="center" padding={{ vertical: "l" }} color="text-body-secondary">
+                        No log events. Logs appear after the function is invoked.
+                      </Box>
+                    ) : (
+                      <Box variant="code" display="block">
+                        <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowX: "auto" }}>
+                          {logEvents.join("")}
+                        </pre>
+                      </Box>
+                    )}
+                  </Container>
+                </SpaceBetween>
+              ),
+            },
+            {
+              id: "configuration",
+              label: "Configuration",
+              content: (
+                <ConfigurationTab
+                  config={config}
+                  reservedConcurrency={reservedConcurrency}
+                  tags={tags}
+                />
               ),
             },
             {
@@ -438,6 +472,36 @@ export default function FunctionDetailPage() {
           ]}
         />
       </SpaceBetween>
+
+      <Modal
+        visible={pending !== null}
+        onDismiss={() => setPending(null)}
+        header={pending === "delete" ? "Delete function" : "Throttle function"}
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setPending(null)} disabled={acting}>
+                Cancel
+              </Button>
+              <Button variant="primary" loading={acting} onClick={() => void runPending()}>
+                {pending === "delete" ? "Delete" : "Throttle"}
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        {pending === "delete" ? (
+          <Alert type="warning">
+            Delete function "{functionName}"? This cannot be undone. Aliases and versions are
+            deleted with it.
+          </Alert>
+        ) : (
+          <Alert type="warning">
+            Throttle "{functionName}"? This sets reserved concurrency to 0, stopping all
+            invocations until you raise it again.
+          </Alert>
+        )}
+      </Modal>
     </ContentLayout>
   );
 }

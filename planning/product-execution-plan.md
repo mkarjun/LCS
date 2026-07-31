@@ -715,12 +715,31 @@ recorded here so the pass has a concrete checklist.
   multiselect (SQS/DynamoDB/Kinesis/VPC service-role policies) are also offered. Role
   auto-creation is retried once on a name collision. Verified end to end against the
   emulator: CreateRole → AttachRolePolicy → CreateFunction returns State=Active.
-- **Code tab** — AWS's first and default tab, not built at all. Biggest single gap.
-- Tab order wrong: AWS is Code, Test, Monitor, Configuration, Aliases, Versions.
-- Function overview panel (Diagram/Template, Add trigger, Add destination).
-- Throttle / Copy ARN / Actions buttons.
-- Configuration sub-navigation: AWS has 15 entries, ours is one flat panel.
-- Monitor: AWS shows a metrics grid with a time-range selector.
+- ~~**Code tab**~~ **Resolved 2026-07-31.** In-browser code editor built (`CodeEditor.tsx`
+  + `lambdaZip.ts`): fetches the deployment package from GetFunction's `Code.Location`,
+  unzips it in the browser (stored + deflate via `DecompressionStream`), shows a file list
+  beside a text editor, and **Deploy** rebuilds the zip and calls `UpdateFunctionCode` —
+  the exact AWS round-trip. Container-image functions get a notice, as in AWS. Verified end
+  to end: edited in the browser, deployed, re-read the package over `Code.Location` and the
+  new source was there. A full Monaco/Cloud9 editor is not reproducible under the artifact
+  CSP, so this is a lighter editor with the same loop.
+- ~~Tab order wrong~~ **Fixed.** Now Code, Test, Monitor, Configuration, Aliases, Versions,
+  with **Code** as the default tab.
+- ~~Function overview panel~~ **Built** (`FunctionOverview.tsx`): Diagram/Template toggle
+  (Template renders a read-only SAM view), function box with layer count, ARN + copy,
+  description, last modified. **Add trigger / Add destination** are shown greyed — no
+  single-surface console trigger flow in LCS yet.
+- ~~Throttle / Copy ARN / Actions buttons~~ **Built.** Copy ARN copies to clipboard;
+  Throttle sets reserved concurrency to 0 via `PutFunctionConcurrency` (with a confirm);
+  Actions holds Test and Delete function (`DeleteFunction`, with a confirm).
+- ~~Configuration sub-navigation~~ **Built** (`ConfigurationTab.tsx`): a left rail with
+  General configuration, Environment variables, Permissions, Concurrency, and Tags backed
+  by real data; the other AWS entries (Triggers, Destinations, VPC, Monitoring tools, Async
+  invocation, Function URL, File systems, Code signing, Runtime management) are greyed with
+  a reason, matching the nav convention.
+- Monitor: still no metrics grid — LCS produces no Lambda metrics, so the tab shows an
+  explanatory alert plus recent CloudWatch log events (greyed-metrics honesty rather than a
+  fake chart).
 
 ### EC2
 - ~~**No create actions on resource pages.**~~ **Resolved 2026-07-31.** `ResourceListPage`
