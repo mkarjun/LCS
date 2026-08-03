@@ -1142,6 +1142,19 @@ public class IamService implements SessionAccountLookup {
                 return Optional.empty();
             }
             String roleArn = session.getRoleArn();
+            if (roleArn == null || roleArn.isBlank()) {
+                // GetSessionToken — and CloudShell, which mints credentials the same way —
+                // registers a session with no role: those credentials carry the calling
+                // identity's own permissions, not a role's. AWS reports that identity's ARN
+                // here; with no signed-in user, the account root is the honest stand-in.
+                // Dereferencing the null role instead surfaced as an InternalFailure on
+                // GetCallerIdentity, the first command most people run.
+                String originAccountId = session.getOriginAccountId();
+                String account = originAccountId == null || originAccountId.isBlank()
+                        ? regionResolver.getAccountId()
+                        : originAccountId;
+                return Optional.of(AwsArnUtils.Arn.of("iam", "", account, "root").toString());
+            }
             String roleName = roleArn.contains("/") ? roleArn.substring(roleArn.lastIndexOf('/') + 1) : "UnknownRole";
             String accountId = AwsArnUtils.accountOrDefault(roleArn, regionResolver.getAccountId());
             return Optional.of(AwsArnUtils.Arn.of("sts", "", accountId, "assumed-role/" + roleName + "/floci-session").toString());

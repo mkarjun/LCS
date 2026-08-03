@@ -501,6 +501,39 @@ class IamServiceTest {
     }
 
     @Test
+    void resolveCallerArnFallsBackToAccountRootForRolelessSession() {
+        // GetSessionToken and CloudShell both register a session with no role ARN, because
+        // those credentials carry the caller's own permissions rather than a role's.
+        // Dereferencing the null role made GetCallerIdentity fail with an InternalFailure.
+        iamService.registerSession(
+                "ASIAROLELESS",
+                "temp-secret",
+                null,
+                Instant.now().plusSeconds(3600),
+                null,
+                "111122223333"
+        );
+
+        assertEquals("arn:aws:iam::111122223333:root",
+                iamService.resolveCallerArn("ASIAROLELESS").orElseThrow());
+    }
+
+    @Test
+    void resolveCallerArnUsesTheAssumedRoleWhenTheSessionHasOne() {
+        iamService.registerSession(
+                "ASIAWITHROLE",
+                "temp-secret",
+                "arn:aws:iam::111122223333:role/AppRole",
+                Instant.now().plusSeconds(3600),
+                null,
+                "111122223333"
+        );
+
+        assertEquals("arn:aws:sts::111122223333:assumed-role/AppRole/floci-session",
+                iamService.resolveCallerArn("ASIAWITHROLE").orElseThrow());
+    }
+
+    @Test
     void resolveCallerContextDeletesExpiredCrossAccountSessionFromOriginAccount() {
         String accessKeyId = "ASIAEXPIREDCROSSACCOUNT";
         AccountAwareStorageBackend<SessionCredential> sessions = new AccountAwareStorageBackend<>(
