@@ -32,44 +32,86 @@ swappable.
 
 ## Status
 
-### Phase 1 — Frontend (DONE, this branch)
+All four phases are built. The terminal is real: keystrokes reach a shell in a container,
+and the AWS CLI in it talks to LCS under temporary credentials the IAM filter enforces.
+
+### Phase 1 — Frontend (done)
 
 `console/src/services/cloudshell/`:
 - `CloudShellPage.tsx` — AWS-parity chrome: toolbar (Actions, upload/download, new tab),
-  tab strip, split view, fullscreen, per-tab status indicator, dark theme, drag-drop
-  upload target. Route `/_lcs/ui/cloudshell`, launched from the top-nav CloudShell icon.
+  tab strip, split view, fullscreen, per-tab status indicator, dark theme, settings.
+  Route `/_lcs/ui/cloudshell`, launched from the top-nav CloudShell icon.
 - `XtermView.tsx` — xterm.js terminal: ANSI colour, UTF-8, mouse selection, fit-to-
   container with PTY resize, Ctrl/Cmd+C copy-on-selection, Ctrl/Cmd+V paste.
-- `session.ts` — WebSocket transport with auto-reconnect + backoff, and an in-browser
-  **preview shell** fallback (command history, line editing, a few commands) so the UI is
-  fully usable before the backend exists. The WS wire protocol is documented in the file.
+- `session.ts` — WebSocket transport with reconnect + backoff, plus the in-browser
+  **preview shell** used only when the backend reports itself unavailable.
+- `api.ts` — the `/_lcs/cloudshell/*` control plane: status probe, restart, delete,
+  upload, download.
 
-`useSim` is currently forced true (no backend yet). Flip to false once the gateway ships.
+### Phase 2 — Terminal gateway + session (done)
 
-### Phase 2 — Terminal gateway + session (TODO, Java/Quarkus)
+`src/main/java/io/github/hectorvent/floci/cloudshell/`:
 
-- WebSocket endpoint `/_lcs/cloudshell/ws?session=<id>` bridging to a `docker exec -it`
-  PTY (reuse `Ec2ContainerManager`'s Docker client).
-- Session manager: create/track/reap sessions; idle-timeout stop, duration terminate.
-- Tools image: awscli v2, terraform, kubectl, git, python, node, docker client, jq, curl,
-  vim, nano, zip, unzip, session-manager-plugin.
+| Class | Role |
+|---|---|
+| `CloudShellWebSocketRoute` | `/_lcs/cloudshell/ws?session=<id>`; the JSON frame protocol |
+| `CloudShellTerminalGateway` | `docker exec` PTY: stdin, output, `resizeExecCmd` |
+| `CloudShellSessionManager` | create/track/reap; idle and lifetime timeouts |
+| `CloudShellProvisioner` | container + home volume; tools image with fallback |
+| `TerminalInputStream` | stdin queue (not `PipedInputStream` — see its javadoc) |
+| `Utf8StreamDecoder` | joins multi-byte characters split across PTY chunks |
 
-### Phase 3 — Credentials + storage (TODO)
+Tools image: `docker/cloudshell/Dockerfile` — AWS CLI v2, Terraform, kubectl, git, python,
+node, jq, vim, nano, zip/unzip, openssh-clients. Build it and CloudShell picks it up:
 
-- Credential manager: STS session token for the logged-in identity, injected as
-  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` / `AWS_REGION`; auto
-  refresh before expiry. No long-lived keys.
-- Volume manager: per-user docker volume, created on first launch, mounted at
-  `/home/cloudshell-user` every session; configurable cleanup.
+```bash
+docker build -t lcs/cloudshell:latest -f docker/cloudshell/Dockerfile docker/cloudshell
+```
 
-### Phase 4 — Config + audit (TODO)
+Without it, sessions fall back to `amazon/aws-cli:latest` and say so in the terminal.
 
-- Config keys (all overridable): AMI/tools image, instance type→container size, subnet,
-  VPC, security group, idle timeout, session timeout, EBS/volume size, auto-stop,
-  auto-terminate, installed tools.
-- Audit: session start/stop + command execution → CloudWatch Logs / audit log.
+### Phase 3 — Credentials + storage (done)
+
+- `CloudShellCredentials` mints an `ASIA…` session credential set exactly as
+  `GetSessionToken` does and registers it with `IamService`, so the existing enforcement
+  filter gates every call the shell makes. Injected as `AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`, alongside `AWS_REGION` and
+  `AWS_ENDPOINT_URL` from `LaunchedContainerAwsEnv`.
+- Home volume is a Docker named volume per **account and Region**, mounted at
+  `/home/cloudshell-user`. It survives session restart, session deletion, and LCS restart —
+  deleting a session removes its container, never its files.
+
+### Phase 4 — Config + audit (done)
+
+`floci.services.cloudshell.*`: `enabled`, `image`, `fallback-image`, `shells`,
+`home-directory`, `home-volume-prefix`, `memory-mb`, `idle-timeout-seconds` (20 min),
+`session-timeout-seconds` (12 h), `max-sessions`, `audit-enabled`, `audit-log-group`,
+`docker-network`.
+
+`CloudShellAudit` writes session start/stop and every command line to the
+`/lcs/cloudshell` CloudWatch log group, one stream per session — readable from the LCS
+CloudWatch console like any other log group.
+
+## Known limits
+
+- **Command audit is keystroke-derived.** `CommandLineTracker` reconstructs lines from
+  stdin, so history recall and tab completion are recorded as what was typed rather than
+  what ran. An exact record needs shell-side instrumentation.
+- **AWS config keys with no LCS meaning are not offered**, rather than accepted and
+  ignored: instance type, subnet/VPC/security group, EBS size. LCS has no such fabric.
+  "Create VPC environment" is shown disabled for the same reason.
+- **No credential auto-refresh mid-session.** Credentials are minted for the session
+  lifetime (12 h by default), so they cannot expire inside a session that the reaper would
+  have ended anyway. A refresh loop only becomes necessary if the lifetime cap is raised.
+- **Sessions are per browser, not per user.** LCS has no login, so the console mints a
+  session id and remembers it in `localStorage`, which is what lets a visit reattach to the
+  environment it left. Two browsers are two environments; they share the home volume, since
+  that is scoped to account and Region.
 
 ## Security invariants
 
-Isolated container per user; no shared filesystem, instance, or credentials. Session creds
-are the user's own — **never** elevated. Abandoned sessions reaped on timeout.
+Isolated container per session; no shared filesystem or credentials between them. Session
+creds are the user's own — **never** elevated. Session ids are constrained to
+`[A-Za-z0-9_-]{1,64}` before becoming a container name; uploads are constrained to a plain
+file name so they cannot be written outside the home directory. Abandoned sessions are
+reaped on timeout, and every session is torn down on LCS shutdown.

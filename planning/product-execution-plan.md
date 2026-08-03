@@ -627,7 +627,33 @@ excluded. Fixed — the proxy now forwards everything and the bypass list protec
 assets. Production was unaffected (no proxy there), but every Query service would have
 been unverifiable in dev.
 
-### Next
+### Next — the continuance (as of 2026-08-03)
+
+The skeleton is complete, the 10 core services have real surfaces, and CloudShell is done.
+What remains splits into three tracks that do not block each other.
+
+**Track A — prove what exists (highest priority, blocks any public release).**
+Nothing here adds a feature; it establishes that what is already built actually works.
+
+1. Run the five unrun compatibility suites (Python, AWS CLI, Go, Rust, Java). Node is the
+   only one ever run, and not since the emulator fixes.
+2. Sweep for remaining Query-protocol member-name defects across all 70 services.
+3. Playwright E2E for the console: per T1 service, inventory / create / detail / edit /
+   delete / empty / error, plus the console↔API out-of-band assertion from Phase 3b.
+4. Capture AWS side-by-side parity evidence for the 10 built services.
+
+**Track B — finish the 10 (the "100% pass" already agreed).**
+Work the completeness backlog below, service by service. Biggest single item is Lambda's
+missing Code tab; the largest systematic one is making the first eight services grey out
+unavailable AWS entries the way RDS and CloudFormation do, so the console is consistent.
+
+**Track C — widen.**
+Only after A and B. The next 10 services by usage, then the rest by wave. Resist starting
+this early: a wide, shallow console that has never been tested is worth less than a narrow
+one that has.
+
+Phase 2 (edge-router classifier) remains independent of all three and can be picked up by
+anyone not working the console.
 
 ### Deliverables due at the 10-service mark
 
@@ -942,12 +968,51 @@ Three defects were invisible to the AWS CLI and the compatibility suite:
 Also fixed: **`DescribeStacks` never returned the stack's `Parameters`.** Two causes, both
 needed: `stackToXml` never wrote the element, and `Stack.parameters` was never populated —
 the values lived only on the change set that applied them. The console's Parameters tab
-was empty for every stack. Neptune and DocumentDB have the same `DBClusterMember` defect
-and are handed off separately.
+was empty for every stack.
+
+4. **Neptune and DocumentDB carried the same `DBClusterMember` defect.** Both
+   `NeptuneQueryHandler.clusterXml` and `DocDbQueryHandler.clusterXml` emitted
+   `<DBClusterMembers><member>`. **Fixed and verified 2026-08-03** — 36/36 DocDB + Neptune
+   integration tests green.
+
+   **The existing tests could not have caught it, and that was the more important find.**
+   `clusterHasInstanceMember` in both suites asserted only that the instance id appeared in
+   the response — which is true under *either* element name. Both now assert
+   `<DBClusterMember>` is present and `<member>` is absent. The guard was checked by
+   reintroducing the bug: the test fails, then passes again once reverted. An assertion
+   that has never been seen to fail is not yet a guard.
 
 Lesson to add to the list: **probe with the same SDK the console uses.** The AWS CLI is a
 more forgiving parser than the JS SDK, so "the CLI shows it" is not evidence the wire
 format is right.
+
+**This class of bug is not exhausted.** Only the lists that a console screen happened to
+render have been checked. Any Query-protocol list shape whose member has a custom name is a
+candidate, across all 70 services. Worth a systematic sweep rather than waiting for each one
+to surface: grep for `.start("` immediately followed by `start("member")` and check each
+against the AWS model.
+
+### CloudShell
+
+Built and working end to end; these are the gaps against AWS, all deliberate.
+
+- **Command audit is keystroke-derived.** `CommandLineTracker` rebuilds lines from stdin, so
+  history recall and tab completion are logged as what was *typed*, not what *ran*. An exact
+  record needs shell-side instrumentation (a `PROMPT_COMMAND` hook writing history out of
+  band).
+- **No credential auto-refresh mid-session.** Credentials are minted for the full session
+  lifetime (12 h), so they cannot expire inside a session the reaper would have ended
+  anyway. Needed only if that cap is raised.
+- **Sessions are per browser, not per user.** LCS has no login; the console mints a session
+  id into `localStorage`. Two browsers are two environments.
+- **AWS config with no LCS meaning is not offered** rather than accepted and ignored:
+  instance type, subnet/VPC/security group, EBS size. "Create VPC environment" is shown
+  disabled — LCS models VPCs as metadata, with no network to place a shell into.
+- **No Playwright coverage**, in common with the rest of the console. Verified by a scripted
+  WebSocket client (`websockets` + the documented frame protocol), which is a good pattern
+  to keep but is not a browser test.
+- Terminal font/theme are not user-configurable; AWS's CloudShell settings dialog exposes
+  both. Ours reports configuration rather than changing it.
 
 ### Cross-cutting
 - No delete/edit actions on most detail pages.
@@ -977,9 +1042,32 @@ Everything below is what a new session needs to continue without re-deriving any
 - Console coverage: **all 10 core services** have real surfaces —
   S3, EC2, IAM, Lambda, CloudWatch, DynamoDB, SQS, SNS, **RDS**, **CloudFormation**.
   The other 60 are reachable via honest placeholder pages.
+- **CloudShell is complete** (all four phases) and verified against a running emulator.
+  See `planning/cloudshell.md`.
 - Upstream merged: 457 commits, 52 -> 70 services. Node compatibility suite passed
   433/433. **The other five suites (Python, AWS CLI, Go, Rust, Java) have not been run,
-  and none has been re-run since the four emulator fixes recorded in the backlog.**
+  and none has been re-run since the emulator fixes recorded in the backlog.**
+
+## Open items — do these before anything else
+
+Ordered by what blocks a release, not by size.
+
+1. **Free disk on the build host.** C: hit 100% on 2026-08-03 during repeated image builds.
+   `docker builder prune` recovered ~7 GB, which was enough to finish, but Docker Desktop's
+   WSL2 VHDX does not shrink on its own — reclaiming the rest needs `wsl --shutdown`
+   followed by a VHDX compact, which stops every running container on the machine, so it is
+   a maintainer decision. A full disk makes Maven fail in ways that look like code errors.
+2. **Run the five unrun compatibility suites** (Python, AWS CLI, Go, Rust, Java). Only Node
+   has ever been run, and not since any of the emulator fixes. This is the single largest
+   unknown in the project: five of six suites have never been green on this branch.
+   *Nothing should be announced publicly before this passes.*
+3. **Sweep for remaining Query-protocol member-name defects** across all 70 services (see
+   the wire-format section above). Four have been found by accident; there is no reason to
+   think that is all of them.
+4. **Playwright console E2E** — still zero coverage for any console flow, which is the gap
+   Phase 3a exists to close. The console is currently only ever tested by hand.
+5. **AWS side-by-side parity evidence** — still not captured for any service, so
+   `aws-console-parity.md`'s bar is unmet by its own definition. Needs manual screenshots.
 
 ### Session 2026-07-31 — EC2/IAM/Lambda depth, CloudShell, shell polish
 
@@ -1023,6 +1111,56 @@ Shipped and pushed to `mkarjun/LCS` this session:
   async destination *delivery* is not emulated (config stored, not delivered).
 - **README** rebranded Floci → LCS (upstream-specific links dropped, not repointed;
   `FLOCI_*` env vars kept verbatim with a rename note).
+
+### Session 2026-08-03 — CloudShell backend (phases 2–4)
+
+CloudShell is now end to end. The frontend's WebSocket seam is met by a real gateway, so
+`useSim` is gone: the console probes `/_lcs/cloudshell/status` and only runs the preview
+shell when LCS says a real one cannot be served, showing LCS's own reason for it.
+
+New package `io.github.hectorvent.floci.cloudshell` — gateway (`docker exec` PTY over the
+documented frame protocol), session manager with idle/lifetime reaping, container and
+home-volume provisioning, STS session credentials registered with `IamService`, file
+upload/download, and a CloudWatch Logs audit trail. Config lives under
+`floci.services.cloudshell.*`. Tools image: `docker/cloudshell/Dockerfile`. Full detail and
+the known limits are in `planning/cloudshell.md`.
+
+Things worth carrying forward:
+
+- **`PipedInputStream` is the wrong stdin for a WebSocket-fed PTY.** It remembers the last
+  writing thread and throws `"Write end dead"` once that thread exits; WebSocket frames
+  arrive on whichever Vert.x event-loop thread is current. `TerminalInputStream` is a
+  queue-backed stream instead.
+- **PTY output must be UTF-8 decoded incrementally.** A multi-byte character straddles two
+  chunks routinely — decoding each chunk alone turns the AWS CLI's table borders into
+  replacement characters.
+- **Vite's catch-all proxy cannot carry the terminal socket.** Setting `ws: true` on the
+  `^/` entry would also intercept Vite's own HMR socket, so `/_lcs/cloudshell` gets its own
+  proxy entry, declared first.
+- **A Vert.x result handler runs back on the event loop.** Splitting "start the container"
+  into `executeBlocking` and leaving the `execCreateCmd` in `onSuccess` puts a synchronous
+  Docker call on the event loop. Both halves belong in the blocking step.
+
+Two bugs that only a running emulator could have found, both of which unit tests and
+type-checking passed straight over:
+
+- **A launched container must be given LCS's embedded DNS** (`withEmbeddedDns()`).
+  `ContainerReachableEndpoint` hands the workload `http://localhost.floci.io:4566` whenever
+  the embedded DNS server is up, so without the resolver every AWS CLI call inside the
+  container fails with *Could not connect to the endpoint URL*. Every other
+  container-launching service already called it; CloudShell did not, and nothing in the
+  build caught it. **Check this first when a new container-backed feature cannot reach LCS.**
+- **A session id must be stable across page loads.** The first cut minted one per mount, so
+  every visit to the page built another container and abandoned the last to the reaper —
+  the ten-session cap would be reached in ten visits. The console now remembers the id in
+  `localStorage`, which is also what makes "come back to the environment you left" true.
+  Only running it in a browser showed this; the scripted WebSocket check passes its own id.
+- **`IamService.resolveCallerArn` dereferenced a null `roleArn`** — a pre-existing bug, not
+  a CloudShell one. `GetSessionToken` registers sessions with no role, so
+  `aws sts get-session-token && aws sts get-caller-identity` has always failed with
+  `InternalFailure: Cannot invoke "String.contains(...)" because "roleArn" is null`.
+  CloudShell just made it the *first* command a user runs. Roleless sessions now resolve to
+  the account root ARN, which is what the handler already fell back to for unknown callers.
 
 ## Start the environment
 
@@ -1072,6 +1210,38 @@ CLI flag is the only override.
 10. **`useServiceNav` must not JSON round-trip its argument.** Item labels can be React
     elements (greyed nav entries, service icons); `JSON.stringify` strips `$$typeof` and
     React then throws on the parsed object. The hook keys off `title` + `href` instead.
+11. **Any container LCS launches needs `withEmbeddedDns()`.** The endpoint handed to the
+    workload is `http://localhost.floci.io:4566` whenever the embedded DNS server is up, so
+    a container without that resolver fails every AWS call with *Could not connect to the
+    endpoint URL*. It compiles, type-checks, and unit-tests fine — only a live session shows
+    it. First thing to check when a container-backed feature cannot reach LCS.
+12. **A cancelled `docker build` still finishes server-side.** Stopping the client leaves
+    BuildKit running and it tags the image anyway, so the tag can hold pre-fix code that
+    looks freshly built. Compare image IDs before and after, not just timestamps.
+13. **The browser caches `index.html`.** Vite asset filenames are content-hashed, but the
+    entry document is not, so a rebuilt console can keep serving the previous bundle to an
+    open tab. Compare the `assets/index-*.js` the server returns against the one the page
+    actually loaded before concluding a change did not take.
+14. **An assertion that has never failed is not a guard.** Four `DBClusterMember` bugs got
+    past a 1,968-test suite because the tests asserted the *id* was in the response, which
+    is true under either element name. When fixing a wire-format bug, reintroduce it once
+    and watch the new test fail before trusting it.
+15. **Integration tests that launch containers need the Docker socket.** Running them in a
+    Maven container without `-v /var/run/docker.sock:/var/run/docker.sock` gives 500s and
+    cascading 404s — 27 failures that look exactly like a broken change. The tell is
+    `SocketException: No such file or directory` in the surefire report.
+    **`DocDbIntegrationTest` is also timing-flaky under load**: `createCluster` waits on a
+    real mongo container and can hit `SocketTimeoutException: Read timed out`, after which
+    the `@Order`-dependent tests cascade (`createClusterDuplicateFails` sees 200 instead of
+    400, because the cluster it expects to already exist was never created). Observed at
+    85 s for the suite when it passes in ~50 s. Re-run the suite alone before believing a
+    failure here.
+16. **Repeated image builds will fill the disk.** Each LCS image is ~590 MB and BuildKit
+    keeps a large cache; C: went from workable to 0 bytes free in one session.
+    `docker builder prune` frees space *inside* Docker's WSL2 VHDX, but that file never
+    shrinks by itself — reclaiming it on the host needs `wsl --shutdown` plus a VHDX
+    compact, which stops every container on the machine. Budget for this before a long
+    build session, because a full disk fails in ways that look like code errors.
 
 ## Per-service build recipe
 

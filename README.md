@@ -180,6 +180,28 @@ RDS, CloudFormation) have AWS-replica surfaces — inventory, detail, and create
 flows, including an in-browser Lambda code editor that deploys through `UpdateFunctionCode`.
 Every other service is reachable, with API/CLI access available for all of them.
 
+### CloudShell
+
+The console has a built-in terminal, reached from the CloudShell icon in the top navigation.
+It runs a real shell in a container, with the AWS CLI already pointed at LCS and
+authenticated with temporary credentials minted by LCS's own STS — no `aws configure`, and
+no long-lived keys. Files you leave in the home directory persist across sessions, per
+account and Region.
+
+It needs the Docker socket (a session is a container). Without it, the terminal says so and
+falls back to a clearly-labelled in-browser preview shell.
+
+By default a session runs `amazon/aws-cli:latest`. For the fuller tool set — Terraform,
+kubectl, git, Python, Node.js, jq — build the image LCS prefers:
+
+```bash
+docker build -t lcs/cloudshell:latest -f docker/cloudshell/Dockerfile docker/cloudshell
+```
+
+Sessions are reclaimed after 20 minutes idle and 12 hours total, and session activity is
+written to the `/lcs/cloudshell` CloudWatch log group. All of it is configurable under
+`floci.services.cloudshell.*` (`FLOCI_SERVICES_CLOUDSHELL_*` as environment variables).
+
 ## Features
 
 <details open>
