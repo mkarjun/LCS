@@ -39,6 +39,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // CloudShell's terminal gateway is a WebSocket, and the catch-all below cannot carry
+      // it: turning on `ws` there would also intercept Vite's own HMR socket. Listed first
+      // so it wins — Vite matches proxy entries in declaration order.
+      "^/_lcs/cloudshell": {
+        target: process.env.LCS_ENDPOINT ?? "http://localhost:4566",
+        changeOrigin: false,
+        ws: true,
+      },
       // Must include the bare "/" path. AWS Query-protocol services (EC2, IAM, STS, SQS,
       // SNS, CloudFormation) POST to the root, so excluding "/" sends them to Vite and
       // they fail with an XML parse error on the returned HTML. The app itself lives

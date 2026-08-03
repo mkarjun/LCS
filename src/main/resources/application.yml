@@ -439,3 +439,7 @@ floci:
         port: 1883
     iotdata:
       enabled: true
+    # LCS CloudShell — the console's in-browser terminal. Needs the Docker socket, since a
+    # session is a container. Disable to hide the CloudShell surface entirely.
+    cloudshell:
+      enabled: true

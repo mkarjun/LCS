@@ -23,10 +23,21 @@ export interface XtermHandle {
  * selection, a fit-to-container addon that drives PTY resize, and Ctrl/Cmd+C copy when
  * there is a selection (falling back to SIGINT when there is none, as a real shell does).
  */
-export const XtermView = forwardRef<
-  XtermHandle,
-  { sessionId: string; useSim: boolean; onState: (state: SessionState, message?: string) => void }
->(function XtermView({ sessionId, useSim, onState }, ref) {
+interface XtermViewProps {
+  sessionId: string;
+  /** True when the backend is unavailable and the in-browser preview shell should run. */
+  useSim: boolean;
+  /** Backend's own explanation, shown in the preview shell's banner. */
+  simReason?: string;
+  region?: string;
+  account?: string;
+  onState: (state: SessionState, message?: string) => void;
+}
+
+export const XtermView = forwardRef<XtermHandle, XtermViewProps>(function XtermView(
+  { sessionId, useSim, simReason, region, account, onState },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -78,7 +89,7 @@ export const XtermView = forwardRef<
     termRef.current = term;
     fitRef.current = fit;
 
-    const session = openSession(sessionId, { probeSim: useSim });
+    const session = openSession(sessionId, { probeSim: useSim, simReason, region, account });
     sessionRef.current = session;
     session.onOutput((data) => term.write(data));
     session.onState((state, message) => onStateRef.current(state, message));
@@ -116,8 +127,11 @@ export const XtermView = forwardRef<
       term.dispose();
       termRef.current = null;
     };
-    // Keyed only on the session identity — onState is read through a ref, so a new parent
-    // render does not tear down and recreate the terminal.
+    // Keyed only on the session identity and transport — onState is read through a ref, so
+    // a new parent render does not tear down and recreate the terminal. Region and account
+    // are deliberately not dependencies: they are read once when the session is opened, and
+    // switching Region mid-session must not silently reconnect to a different one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, useSim]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;

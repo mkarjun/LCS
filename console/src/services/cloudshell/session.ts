@@ -1,12 +1,9 @@
 /**
  * CloudShell terminal session transport.
  *
- * The console talks to the terminal gateway over a WebSocket using a tiny framed protocol
- * (below). The gateway is a planned LCS backend service that bridges the socket to a
- * `docker exec` PTY inside a per-session tools container. Until that backend ships, this
- * client falls back to an in-browser simulated shell so the CloudShell UI is fully
- * usable and reviewable — the seam is the WebSocket, so swapping the sim for the real
- * gateway changes nothing above this file.
+ * The console talks to the LCS terminal gateway over a WebSocket using a tiny framed
+ * protocol (below). The gateway bridges the socket to a `docker exec` PTY inside the
+ * session's container — see `io.github.hectorvent.floci.cloudshell` on the backend.
  *
  * Wire protocol (JSON text frames, both directions):
  *   client → gateway:
@@ -14,10 +11,19 @@
  *     { "type": "resize", "cols": <n>, "rows": <n> }
  *   gateway → client:
  *     { "type": "output", "data": "<utf8 stdout/stderr, may contain ANSI>" }
- *     { "type": "status", "state": "connecting"|"ready"|"closed", "message"?: "" }
+ *     { "type": "status", "state": "connecting"|"ready"|"closed",
+ *       "message"?: "", "fatal"?: true }
  *
- * The path is `/_lcs/cloudshell/ws?session=<id>` on the same origin, so no CORS and the
- * browser sends the console's session cookie/creds context.
+ * `fatal` means reconnecting cannot help (CloudShell disabled, no Docker socket), so the
+ * client stops retrying and leaves the reason on screen.
+ *
+ * The path is `/_lcs/cloudshell/ws?session=<id>` on the same origin, so no CORS and no
+ * separate endpoint configuration.
+ *
+ * When the backend reports itself unavailable, CloudShellPage runs the in-browser preview
+ * shell below instead, with the backend's own reason in its banner. The preview is never a
+ * silent substitute for a broken terminal — it appears only when LCS has said there is no
+ * terminal to be had.
  */
 
 export type SessionState = "connecting" | "ready" | "closed";
@@ -30,25 +36,32 @@ export interface TerminalSession {
   close(): void;
 }
 
-const WS_PATH = "/_lcs/cloudshell/ws";
-
-/**
- * Opens a real gateway session, auto-reconnecting with backoff. If the gateway is not
- * reachable (no backend yet), resolves to a simulated session instead so the terminal
- * still works. `probeSim` forces the simulator (used by tests / offline demos).
- */
-export function openSession(sessionId: string, opts: { probeSim?: boolean } = {}): TerminalSession {
-  if (opts.probeSim) {
-    return simulatedSession();
-  }
-  return reconnectingSession(sessionId);
+export interface SessionOptions {
+  /** Run the in-browser preview shell instead of connecting. */
+  probeSim?: boolean;
+  /** Shown in the preview shell's banner to explain why there is no real terminal. */
+  simReason?: string;
+  region?: string;
+  account?: string;
 }
 
-function reconnectingSession(sessionId: string): TerminalSession {
+const WS_PATH = "/_lcs/cloudshell/ws";
+/** Reconnect attempts before giving up on a gateway that keeps dropping the socket. */
+const MAX_RECONNECT_ATTEMPTS = 5;
+
+export function openSession(sessionId: string, opts: SessionOptions = {}): TerminalSession {
+  if (opts.probeSim) {
+    return simulatedSession(opts.simReason);
+  }
+  return reconnectingSession(sessionId, opts);
+}
+
+function reconnectingSession(sessionId: string, opts: SessionOptions): TerminalSession {
   let socket: WebSocket | null = null;
   let closedByUser = false;
   let attempts = 0;
-  let fallback: TerminalSession | null = null;
+  // Set once the gateway says the failure is permanent, so we stop reconnecting.
+  let fatal = false;
   const outputCbs: ((data: string) => void)[] = [];
   const stateCbs: ((state: SessionState, message?: string) => void)[] = [];
 
@@ -56,22 +69,31 @@ function reconnectingSession(sessionId: string): TerminalSession {
   const emitState = (state: SessionState, message?: string) =>
     stateCbs.forEach((cb) => cb(state, message));
 
+  const url = () => {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const query = new URLSearchParams({ session: sessionId });
+    if (opts.region) {
+      query.set("region", opts.region);
+    }
+    if (opts.account) {
+      query.set("account", opts.account);
+    }
+    return `${proto}//${window.location.host}${WS_PATH}?${query}`;
+  };
+
   const connect = () => {
     emitState("connecting");
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${window.location.host}${WS_PATH}?session=${encodeURIComponent(sessionId)}`;
     let ws: WebSocket;
     try {
-      ws = new WebSocket(url);
+      ws = new WebSocket(url());
     } catch {
-      startFallback();
+      emitState("closed", "Could not open a connection to the CloudShell gateway.");
       return;
     }
     socket = ws;
 
     ws.onopen = () => {
       attempts = 0;
-      emitState("ready");
     };
     ws.onmessage = (event) => {
       try {
@@ -80,10 +102,14 @@ function reconnectingSession(sessionId: string): TerminalSession {
           data?: string;
           state?: SessionState;
           message?: string;
+          fatal?: boolean;
         };
         if (frame.type === "output" && frame.data !== undefined) {
           emitOutput(frame.data);
         } else if (frame.type === "status" && frame.state) {
+          if (frame.fatal) {
+            fatal = true;
+          }
           emitState(frame.state, frame.message);
         }
       } catch {
@@ -93,14 +119,14 @@ function reconnectingSession(sessionId: string): TerminalSession {
     };
     ws.onclose = () => {
       socket = null;
-      if (closedByUser) {
+      if (closedByUser || fatal) {
         emitState("closed");
         return;
       }
       attempts += 1;
-      // First failure with no server at all → drop to the simulator so the UI works.
-      if (attempts >= 2 && fallback === null) {
-        startFallback();
+      if (attempts > MAX_RECONNECT_ATTEMPTS) {
+        emitOutput("\r\n\x1b[31mLost the connection to the CloudShell gateway.\x1b[0m\r\n");
+        emitState("closed", "Disconnected.");
         return;
       }
       const delay = Math.min(1000 * 2 ** attempts, 8000);
@@ -114,46 +140,34 @@ function reconnectingSession(sessionId: string): TerminalSession {
     ws.onerror = () => ws.close();
   };
 
-  const startFallback = () => {
-    fallback = simulatedSession();
-    fallback.onOutput(emitOutput);
-    fallback.onState(emitState);
-  };
-
   connect();
 
   return {
     onOutput: (cb) => outputCbs.push(cb),
     onState: (cb) => stateCbs.push(cb),
     send: (data) => {
-      if (fallback) {
-        fallback.send(data);
-      } else if (socket?.readyState === WebSocket.OPEN) {
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "input", data }));
       }
     },
     resize: (cols, rows) => {
-      if (fallback) {
-        fallback.resize(cols, rows);
-      } else if (socket?.readyState === WebSocket.OPEN) {
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "resize", cols, rows }));
       }
     },
     close: () => {
       closedByUser = true;
-      fallback?.close();
       socket?.close();
     },
   };
 }
 
 /**
- * In-browser simulated shell. Not a real terminal — enough of one to demonstrate the
- * CloudShell UX (prompt, line editing, history, a handful of commands) until the gateway
- * backend lands. Clearly labelled as a preview in its banner so it is never mistaken for
- * the real thing.
+ * In-browser preview shell. Not a real terminal — enough of one to keep the CloudShell UI
+ * usable (prompt, line editing, history, a handful of commands) on an LCS that cannot
+ * serve a real one. Its banner states why, so it is never mistaken for the real thing.
  */
-function simulatedSession(): TerminalSession {
+function simulatedSession(reason?: string): TerminalSession {
   const outputCbs: ((data: string) => void)[] = [];
   const stateCbs: ((state: SessionState, message?: string) => void)[] = [];
   // Buffer output and the current state, then replay them to each listener as it
@@ -178,10 +192,11 @@ function simulatedSession(): TerminalSession {
 
   const banner =
     "\x1b[36m" +
-    "Welcome to LCS CloudShell (preview)\r\n" +
+    "LCS CloudShell — preview shell\r\n" +
     "\x1b[0m" +
-    "This is an in-browser preview shell. The real terminal — a per-session container\r\n" +
-    "with the AWS CLI pre-authenticated against LCS — arrives with the gateway backend.\r\n" +
+    (reason ? `\x1b[33m${reason}\x1b[0m\r\n` : "") +
+    "This is an in-browser preview. A real terminal runs the AWS CLI in a container,\r\n" +
+    "pre-authenticated against LCS with your own IAM session.\r\n" +
     "Try: help, aws --version, whoami, echo, clear.\r\n\r\n";
 
   const run = (cmd: string) => {
@@ -192,7 +207,8 @@ function simulatedSession(): TerminalSession {
       case "help":
         out(
           "Preview commands: help, whoami, pwd, aws, echo <text>, clear, date.\r\n" +
-            "In the full backend every command runs in a real container with your IAM session.\r\n",
+            "With the CloudShell backend available, every command runs in a real container\r\n" +
+            "under your IAM session.\r\n",
         );
         return;
       case "whoami":
@@ -209,11 +225,11 @@ function simulatedSession(): TerminalSession {
         return;
       case "aws":
         if (rest[0] === "--version") {
-          out("aws-cli/2.x (LCS CloudShell preview — real CLI runs in the backend container)\r\n");
+          out("aws-cli/2.x (LCS CloudShell preview — the real CLI runs in the session container)\r\n");
         } else {
           out(
-            "\x1b[33mThe AWS CLI runs in the CloudShell backend container, not in this preview.\x1b[0m\r\n" +
-              "It will be pre-authenticated with your LCS IAM session — no configure step.\r\n",
+            "\x1b[33mThe AWS CLI runs in the CloudShell session container, not in this preview.\x1b[0m\r\n" +
+              "It is pre-authenticated with your LCS IAM session — no configure step.\r\n",
           );
         }
         return;

@@ -585,6 +585,7 @@ public interface EmulatorConfig {
         S3VectorsServiceConfig s3vectors();
         IotServiceConfig iot();
         IotDataServiceConfig iotdata();
+        CloudShellServiceConfig cloudshell();
     }
 
     interface IotServiceConfig {
@@ -1260,6 +1261,77 @@ public interface EmulatorConfig {
 
         @WithDefault("false")
         boolean keepRunningOnShutdown();
+
+        Optional<String> dockerNetwork();
+    }
+
+    /**
+     * LCS CloudShell — the in-console terminal. Not an AWS wire API: a session is a
+     * container LCS runs on the user's behalf, reached over a WebSocket from the console.
+     */
+    interface CloudShellServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        /**
+         * Tools image a session runs in. Built by {@code docker/cloudshell/Dockerfile};
+         * when it is not present locally, {@link #fallbackImage()} is used instead so
+         * CloudShell still works on a machine that has never built it.
+         */
+        @WithDefault("lcs/cloudshell:latest")
+        String image();
+
+        /**
+         * Image used when {@link #image()} is unavailable. The default carries a real AWS
+         * CLI v2 on Amazon Linux, which is the part of the tools image that matters most.
+         */
+        @WithDefault("amazon/aws-cli:latest")
+        String fallbackImage();
+
+        /** Shell started for each terminal, tried in order until one exists in the image. */
+        @WithDefault("/bin/bash,/bin/sh")
+        List<String> shells();
+
+        /** In-container home directory, backed by the session's persistent volume. */
+        @WithDefault("/home/cloudshell-user")
+        String homeDirectory();
+
+        /** Prefix for the per-user Docker volume that backs the home directory. */
+        @WithDefault("lcs-cloudshell-home")
+        String homeVolumePrefix();
+
+        /** Memory limit for a session container, in MiB. Zero means no limit. */
+        @WithDefault("1024")
+        int memoryMb();
+
+        /**
+         * Seconds a session may sit with no terminal attached and no keystrokes before it
+         * is stopped and removed. AWS CloudShell's idle timeout is 20 minutes.
+         */
+        @WithDefault("1200")
+        long idleTimeoutSeconds();
+
+        /**
+         * Hard ceiling on a session's lifetime, reaped regardless of activity. AWS
+         * CloudShell terminates a session after 12 hours.
+         */
+        @WithDefault("43200")
+        long sessionTimeoutSeconds();
+
+        /** Upper bound on concurrent sessions, guarding against runaway container creation. */
+        @WithDefault("10")
+        int maxSessions();
+
+        /**
+         * When true, session start/stop and every command line are written to the
+         * {@code /lcs/cloudshell} CloudWatch log group.
+         */
+        @WithDefault("true")
+        boolean auditEnabled();
+
+        /** CloudWatch log group the audit trail is written to. */
+        @WithDefault("/lcs/cloudshell")
+        String auditLogGroup();
 
         Optional<String> dockerNetwork();
     }
