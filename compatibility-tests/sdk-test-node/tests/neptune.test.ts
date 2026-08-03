@@ -146,6 +146,17 @@ describe('Neptune Instances', () => {
         DBInstanceIdentifier: instanceId,
       }));
       expect(descResp.DBInstances).toHaveLength(1);
+
+      // DBClusterMemberList declares an explicit member locationName of
+      // DBClusterMember. botocore falls back to <member> and parses either
+      // spelling, but this SDK is strict and silently drops mismatched entries,
+      // so an empty DBClusterMembers here means the wire format is wrong.
+      const clusterResp = await neptune.send(new DescribeDBClustersCommand({
+        DBClusterIdentifier: clusterId,
+      }));
+      const members = clusterResp.DBClusters![0].DBClusterMembers!;
+      expect(members).toHaveLength(1);
+      expect(members[0].DBInstanceIdentifier).toBe(instanceId);
     } finally {
       await deleteInstance(instanceId);
     }

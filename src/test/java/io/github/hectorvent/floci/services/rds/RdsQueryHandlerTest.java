@@ -587,6 +587,57 @@ class RdsQueryHandlerTest {
     }
 
     @Test
+    void describeDbParameters_usesParameterTag() {
+        DbParameterGroup group = new DbParameterGroup("pg1", "postgres15", "test group");
+        group.getParameters().put("max_connections", "200");
+        when(service.getDbParameterGroup("pg1")).thenReturn(group);
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBParameterGroupName", "pg1");
+        Response response = handler.handle("DescribeDBParameters", p);
+
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<Parameter><ParameterName>max_connections</ParameterName>"),
+                "Expected <Parameter> wrapping each entry of ParametersList");
+        assertFalse(body.contains("<Parameters><member>"),
+                "Did not expect <member> wrapping ParametersList entries");
+    }
+
+    @Test
+    void describeDbClusterParameters_usesParameterTag() {
+        DbClusterParameterGroup group = new DbClusterParameterGroup("cpg1", "aurora-postgresql16", "test group");
+        group.getParameters().put("log_statement", "all");
+        when(service.getDbClusterParameterGroup("cpg1")).thenReturn(group);
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBClusterParameterGroupName", "cpg1");
+        Response response = handler.handle("DescribeDBClusterParameters", p);
+
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<Parameter><ParameterName>log_statement</ParameterName>"),
+                "Expected <Parameter> wrapping each entry of ParametersList");
+        assertFalse(body.contains("<Parameters><member>"),
+                "Did not expect <member> wrapping ParametersList entries");
+    }
+
+    @Test
+    void describeDbClusters_usesDBClusterMemberTag() {
+        DbCluster cluster = makeCluster("mycluster");
+        cluster.setDbClusterMembers(List.of("instance-1"));
+        when(service.listDbClusters(null)).thenReturn(List.of(cluster));
+
+        Response response = handler.handle("DescribeDBClusters", params());
+
+        String body = (String) response.getEntity();
+        // DBClusterMemberList declares locationName "DBClusterMember"; strict clients
+        // (AWS SDK for JavaScript v3) drop entries wrapped in <member>
+        assertTrue(body.contains("<DBClusterMember><DBInstanceIdentifier>instance-1</DBInstanceIdentifier>"),
+                "Expected <DBClusterMember> wrapping each cluster member");
+        assertFalse(body.contains("<DBClusterMembers><member>"),
+                "Did not expect <member> wrapping DBClusterMembers entries");
+    }
+
+    @Test
     void describeDbParameters_requiresParameterGroupName() {
         Response response = handler.handle("DescribeDBParameters", params());
 
