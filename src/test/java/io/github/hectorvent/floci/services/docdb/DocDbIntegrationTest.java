@@ -156,7 +156,15 @@ class DocDbIntegrationTest {
         .when().post("/")
         .then()
             .statusCode(200)
-            .body(containsString(INSTANCE_ID));
+            .body(containsString(INSTANCE_ID))
+            // The element name is the assertion that matters, not just the id appearing.
+            // DBClusterMemberList's member is named DBClusterMember; emitting the Query
+            // protocol's default <member> still contains the id, so an id-only check passes
+            // while every strict client (the AWS SDK for JavaScript among them) sees an
+            // empty member list. botocore's fallback to <member> is why the AWS CLI — and
+            // this suite, before this line — could not see the bug.
+            .body(containsString("<DBClusterMember>"))
+            .body(not(containsString("<member>")));
     }
 
     @Test

@@ -210,10 +210,14 @@ public class NeptuneQueryHandler {
                 .start("DBClusterMembers");
         if (c.getDbClusterMembers() != null) {
             for (String memberId : c.getDbClusterMembers()) {
-                xml.start("member")
+                // DBClusterMemberList's member is named DBClusterMember, not the Query
+                // protocol's default "member". botocore falls back to "member" so the AWS
+                // CLI parsed the old wrapper, but strict clients — the AWS SDK for
+                // JavaScript among them — dropped every entry and saw an empty cluster.
+                xml.start("DBClusterMember")
                    .elem("DBInstanceIdentifier", memberId)
                    .elem("IsClusterWriter", true)
-                   .end("member");
+                   .end("DBClusterMember");
             }
         }
         xml.end("DBClusterMembers");
