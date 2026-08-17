@@ -160,7 +160,7 @@ The exe does not bundle the LCS image — that would add hundreds of megabytes. 
 tarball beside it and the installer loads it:
 
 ```powershell
-docker save lcs/lcs:merged -o dist\lcs-image.tar
+docker save mkarjun/lcs:latest -o dist\lcs-image.tar
 ```
 
 ## Uninstalling

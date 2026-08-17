@@ -22,7 +22,7 @@
     `lcs -Action Up` are the same command.
 
 .PARAMETER Image
-    Image to run. Defaults to lcs/lcs:merged, or $env:LCS_IMAGE if set.
+    Image to run. Defaults to mkarjun/lcs:latest, or $env:LCS_IMAGE if set.
 
 .PARAMETER Port
     Host port for the API and console. Defaults to 4566.
@@ -68,7 +68,7 @@ param(
     [ValidateSet('Up', 'Down', 'Restart', 'Status', 'Logs', 'Console')]
     [string]$Action = 'Up',
 
-    [string]$Image = $(if ($env:LCS_IMAGE) { $env:LCS_IMAGE } else { 'lcs/lcs:merged' }),
+    [string]$Image = $(if ($env:LCS_IMAGE) { $env:LCS_IMAGE } else { 'mkarjun/lcs:latest' }),
     [string]$ContainerName = 'lcs',
     [int]$Port = 4566,
     [string]$BindAddress = '127.0.0.1',
@@ -80,6 +80,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# What local builds were tagged before the image had a published home. Still
+# honoured so a checkout built the old way keeps working offline.
+$script:LegacyImage = 'lcs/lcs:merged'
 
 function Write-Step { param($Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok   { param($Message) Write-Host "    $Message" -ForegroundColor Green }
@@ -147,8 +151,22 @@ function Assert-ImagePresent {
         return
     }
 
+    # No archive: try the registry. Before the image had a published home this
+    # threw instead, which is why the README's own `docker run` could not work
+    # on a machine that had never built LCS.
+    Write-Step "Pulling $Image"
+    if ((Invoke-Docker pull $Image).ExitCode -eq 0) { return }
+
+    # A local build made before the published name existed still counts.
+    if ((Invoke-Docker image inspect $script:LegacyImage).ExitCode -eq 0) {
+        Write-Warn "Could not reach the registry; using the local $script:LegacyImage instead."
+        $script:Image = $script:LegacyImage
+        return
+    }
+
     throw @"
-Image '$Image' not found, and no lcs-image.tar/.tar.gz next to this script.
+Image '$Image' not found, could not be pulled, and there is no
+lcs-image.tar/.tar.gz next to this script.
 
 Any one of these fixes it:
 

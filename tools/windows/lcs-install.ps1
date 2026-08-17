@@ -32,7 +32,7 @@
     are needed for this part.
 
 .PARAMETER Image
-    LCS image to run. Defaults to lcs/lcs:merged.
+    LCS image to run. Defaults to mkarjun/lcs:latest.
 
 .PARAMETER SkipDependencies
     Do not touch WSL2 or Docker. Fails if Docker is not already working.
@@ -64,7 +64,7 @@ param(
     [string]$UiLog,
     [switch]$BuildFromSource,
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'LCS'),
-    [string]$Image = 'lcs/lcs:merged',
+    [string]$Image = 'mkarjun/lcs:latest',
     [switch]$SkipDependencies,
     [switch]$NoStart,
     [int]$DaemonTimeoutSeconds = 240,
@@ -785,8 +785,10 @@ function Install-ImageFromArchive {
     return $false
 }
 
-# Only attempted for a namespaced reference. `lcs/lcs:merged` is a local build tag that
-# exists on no registry, so pulling it would spend a minute to fail confusingly.
+# Only attempted for a namespaced reference. `lcs/lcs:merged` is the pre-registry local
+# build tag and exists on no registry, so pulling it would spend a minute to fail
+# confusingly. The default $Image is now a published name, so this path is the ordinary
+# one rather than a fallback nothing reached.
 function Install-ImageFromRegistry {
     if ($Image -notmatch '[./]' -or $Image -like 'lcs/lcs:*') {
         return $false

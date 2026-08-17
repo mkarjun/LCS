@@ -14,7 +14,7 @@
 #   lcs console      open the console in a browser
 #
 # Environment overrides:
-#   LCS_IMAGE          image to run           (default lcs/lcs:merged)
+#   LCS_IMAGE          image to run           (default mkarjun/lcs:latest)
 #   LCS_CONTAINER      container name         (default lcs)
 #   LCS_PORT           host port              (default 4566)
 #   LCS_BIND           host interface         (default 127.0.0.1)
@@ -24,7 +24,10 @@
 
 set -euo pipefail
 
-IMAGE="${LCS_IMAGE:-lcs/lcs:merged}"
+IMAGE="${LCS_IMAGE:-mkarjun/lcs:latest}"
+# What local builds were tagged before the image had a published home. Still
+# honoured so a checkout built the old way keeps working offline.
+LEGACY_IMAGE='lcs/lcs:merged'
 CONTAINER="${LCS_CONTAINER:-lcs}"
 PORT="${LCS_PORT:-4566}"
 # LCS has no authentication and accepts any credentials, so publishing it on every
@@ -87,8 +90,24 @@ require_image() {
         return
     fi
 
+    # Before this existed there was no way to get the image except a local build
+    # or a tarball, while the README told people to run a registry tag -- so the
+    # documented first command could not work on a new machine.
+    step "Pulling $IMAGE"
+    if docker pull "$IMAGE"; then
+        return
+    fi
+
+    # A local build made before the published name existed still counts.
+    if docker image inspect "$LEGACY_IMAGE" >/dev/null 2>&1; then
+        warn "Could not reach the registry; using the local $LEGACY_IMAGE instead."
+        IMAGE="$LEGACY_IMAGE"
+        return
+    fi
+
     die \
-"Image '$IMAGE' is not present, and no lcs-image.tar beside this script.
+"Image '$IMAGE' is not present, could not be pulled, and there is no
+    lcs-image.tar beside this script.
 
     Build it from a checkout of the LCS repository:
         docker build -f docker/Dockerfile -t $IMAGE .

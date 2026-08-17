@@ -82,7 +82,7 @@ Configured with environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LCS_IMAGE` | `lcs/lcs:merged` | Image to run |
+| `LCS_IMAGE` | `mkarjun/lcs:latest` | Image to run |
 | `LCS_PORT` | `4566` | Host port |
 | `LCS_BIND` | `127.0.0.1` | Host interface |
 | `LCS_DATA` | *(unset)* | Bind-mount for `/app/data`, enabling persistence |
@@ -108,7 +108,7 @@ Neither the installer nor the packages bundle the LCS image. Put a tarball besid
 installer and it loads it:
 
 ```bash
-docker save lcs/lcs:merged -o lcs-image.tar
+docker save mkarjun/lcs:latest -o lcs-image.tar
 ```
 
 ## Uninstalling

@@ -4,9 +4,11 @@
     image.
 
 .DESCRIPTION
-    LCS-Setup.exe on its own only works where the image already exists, because
-    lcs/lcs:merged is a local build tag published to no registry. Handing someone just the
-    exe leaves them with a launcher and nothing to launch.
+    LCS-Setup.exe on its own has to reach Docker Hub for the image. Bundling it makes
+    the pair genuinely click-and-run, and works on a machine with no network at all.
+
+    Export the tag the launcher actually runs: a bundle bearing any other name makes
+    every install pay a doomed pull before falling back.
 
     This packages the exe together with the image so the pair is genuinely click-and-run:
 
@@ -19,7 +21,7 @@
     exe.
 
 .PARAMETER Image
-    Image to export. Defaults to lcs/lcs:merged.
+    Image to export. Defaults to mkarjun/lcs:latest, which is what the launcher runs.
 
 .PARAMETER Zip
     Also produce dist/LCS-Bundle.zip for transfer as one file.
@@ -29,7 +31,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Image = 'lcs/lcs:merged',
+    [string]$Image = 'mkarjun/lcs:latest',
     [switch]$Zip,
     [string]$OutputDir = (Join-Path $PSScriptRoot 'dist\bundle')
 )

@@ -19,7 +19,7 @@ docker run -d --name lcs \
   -e FLOCI_TLS_ENABLED=true \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -u root \
-  lcs/lcs:latest
+  mkarjun/lcs:latest
 ```
 
 Then:

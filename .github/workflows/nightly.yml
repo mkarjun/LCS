@@ -4,11 +4,16 @@ name: Nightly
 # Runs every night at 22:00 CT (03:00 UTC, approximate — shifts 1 h in CST winter).
 # Can also be triggered manually.
 #
-# Published tags:
-#   Native:  floci/floci:nightly   floci/floci:nightly-mmddyyyy
-#   Compat:  floci/floci:nightly-compat   floci/floci:nightly-mmddyyyy-compat
+# Published tags (LCS_REPO below):
+#   Native:  <repo>:nightly          <repo>:nightly-mmddyyyy
+#   Compat:  <repo>:nightly-compat   <repo>:nightly-mmddyyyy-compat
 #
-# Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN, AWS_ROLE_ARN
+# Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+#
+# Upstream also mirrored every nightly to public.ecr.aws under its own account.
+# That needed an AWS role LCS does not have, so the mirror is gone rather than
+# left to fail every night; Docker Hub is the single home. Restoring it means
+# adding back an OIDC role, an ECR login, and `id-token: write` here.
 
 on:
   schedule:
@@ -18,7 +23,10 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+
+env:
+  # Kept in step with release.yml -- both publish to the same repository.
+  LCS_REPO: ${{ vars.DOCKERHUB_REPO || 'mkarjun/lcs' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -148,17 +156,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.0
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Login to Amazon ECR Public
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          registry-type: public
-
       - name: Build and push native nightly image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         env:
@@ -169,10 +166,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            floci/floci:nightly
-            floci/floci:nightly-${{ needs.prepare.outputs.version }}
-            public.ecr.aws/floci/floci:nightly
-            public.ecr.aws/floci/floci:nightly-${{ needs.prepare.outputs.version }}
+            ${{ env.LCS_REPO }}:nightly
+            ${{ env.LCS_REPO }}:nightly-${{ needs.prepare.outputs.version }}
           labels: |
             org.opencontainers.image.version=nightly-${{ needs.prepare.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -193,10 +188,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            floci/floci:nightly-compat
-            floci/floci:nightly-${{ needs.prepare.outputs.version }}-compat
-            public.ecr.aws/floci/floci:nightly-compat
-            public.ecr.aws/floci/floci:nightly-${{ needs.prepare.outputs.version }}-compat
+            ${{ env.LCS_REPO }}:nightly-compat
+            ${{ env.LCS_REPO }}:nightly-${{ needs.prepare.outputs.version }}-compat
           build-args: |
             VERSION=nightly-${{ needs.prepare.outputs.version }}
           labels: |

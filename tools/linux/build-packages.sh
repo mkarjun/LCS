@@ -117,7 +117,7 @@ LCS_BIND if you understand the consequences.
 This package installs the launcher only. Docker is a declared dependency, and
 the emulator image is pulled or loaded separately:
 
-    docker build -f docker/Dockerfile -t lcs/lcs:merged .
+    docker build -f docker/Dockerfile -t mkarjun/lcs:latest .
 EOF
     chmod 0644 "$root/usr/share/doc/lcs/README"
 }

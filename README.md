@@ -32,10 +32,11 @@ LCS is built on the Floci codebase (originally MIT-licensed) and is distributed 
 Apache-2.0, with upstream attribution preserved (see [License](#license)). It is growing
 into its own product — a full AWS-replica console, and its own execution work over time.
 
-> **Repository note.** Some Docker image references below use `lcs/lcs`, the tag the
-> installers build locally. Where an absolute repository, docs, or registry URL would
-> normally appear, this README intentionally omits it until the project's public home is
-> set — nothing here points at an upstream repository as though it were this project's.
+> **Repository note.** Images are published to Docker Hub as `mkarjun/lcs`. Release tags
+> are `:latest` and the version (`:1.5.34`), with `-compat` variants and a `:nightly`
+> built from the tip of `main`. Where an absolute docs URL would normally appear this
+> README still omits it — nothing here points at an upstream repository as though it were
+> this project's.
 
 ## Install
 
@@ -96,7 +97,7 @@ Options are environment variables on Linux and parameters on Windows:
 | Keep data across restarts | `LCS_DATA=~/.lcs/data` | `-Persist "$env:LOCALAPPDATA\LCS\data"` |
 | Different port | `LCS_PORT=4570` | `-Port 4570` |
 | Reachable RDS databases | `LCS_DB_PORTS=7000-7019` | `-PublishDbPorts` |
-| Different image | `LCS_IMAGE=lcs/lcs:dev` | `-Image lcs/lcs:dev` |
+| Different image | `LCS_IMAGE=mkarjun/lcs:nightly` | `-Image mkarjun/lcs:nightly` |
 
 > **LCS listens on `127.0.0.1` only.** It has no authentication and accepts any
 > credentials, so anything that can reach the port can drive it — including starting
@@ -114,7 +115,7 @@ docker run -d --name lcs \
   -p 4566:4566 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -u root \
-  lcs/lcs:latest
+  mkarjun/lcs:latest
 ```
 
 The Docker socket is needed for the container-backed services (Lambda, RDS, ECS, EC2, and
@@ -152,7 +153,7 @@ any non-empty values unless you explicitly enable stricter service-specific auth
 ```yaml
 services:
   lcs:
-    image: lcs/lcs:latest
+    image: mkarjun/lcs:latest
     ports:
       - "4566:4566"
     volumes:
@@ -543,7 +544,7 @@ LCS is a drop-in replacement for LocalStack Community. The port, credentials, SD
 image: localstack/localstack
 
 # After
-image: lcs/lcs:latest
+image: mkarjun/lcs:latest
 ```
 
 LocalStack environment variables are translated automatically:
@@ -587,7 +588,7 @@ When your application runs in a different container, set `FLOCI_HOSTNAME` to the
 ```yaml
 services:
   lcs:
-    image: lcs/lcs:latest
+    image: mkarjun/lcs:latest
     ports:
       - "4566:4566"
     environment:

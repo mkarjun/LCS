@@ -3,11 +3,18 @@ name: Release
 # Triggered when a version tag (e.g. 1.2.3) is pushed.
 # Builds native (amd64 + arm64) Docker images and pushes them to Docker Hub.
 #
-# Published tags:
-#   Native:  floci/floci:1.2.3        floci/floci:latest
-#   Compat:  floci/floci:1.2.3-compat floci/floci:latest-compat
+# Published tags (LCS_REPO below):
+#   Native:  <repo>:1.2.3        <repo>:latest
+#   Compat:  <repo>:1.2.3-compat <repo>:latest-compat
 #
 # Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+#
+# Before the first release, on the LCS repository:
+#   1. Create the Docker Hub repository named below.
+#   2. Add DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access token
+#      with Read/Write, not your password) as Actions secrets.
+#   3. Optionally set an Actions variable DOCKERHUB_REPO to override LCS_REPO
+#      without editing this file.
 
 on:
   push:
@@ -16,6 +23,12 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # The one place the published image name is defined. Everything below refers
+  # to it, so moving LCS to a different namespace or organisation is this line
+  # (or the DOCKERHUB_REPO repository variable, which wins when it is set).
+  LCS_REPO: ${{ vars.DOCKERHUB_REPO || 'mkarjun/lcs' }}
 
 # Per-tag concurrency. Back-to-back tag pushes (e.g. 1.5.3 and 1.6.0 landing
 # minutes apart) resolve to different ${{ github.ref }} values, so they run
@@ -138,8 +151,8 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            floci/floci:${{ steps.version.outputs.version }}
-            floci/floci:latest
+            ${{ env.LCS_REPO }}:${{ steps.version.outputs.version }}
+            ${{ env.LCS_REPO }}:latest
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
           labels: |
@@ -164,8 +177,8 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            floci/floci:${{ steps.version.outputs.version }}-compat
-            floci/floci:latest-compat
+            ${{ env.LCS_REPO }}:${{ steps.version.outputs.version }}-compat
+            ${{ env.LCS_REPO }}:latest-compat
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
           labels: |
