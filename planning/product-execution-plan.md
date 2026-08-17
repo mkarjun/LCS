@@ -185,6 +185,12 @@ Existing test assets (strong — this is a real asset, not a gap):
 | Compatibility suite | 1,968 tests across Java/Node/Python/Go/Rust/CLI + Terraform/OpenTofu/CDK |
 | Console tests | **1** (`ConsoleControllerIntegrationTest`) |
 
+> These are the numbers as measured when this plan was written, against the legacy Java
+> console (`buildGenericPage`). They are the baseline that justified the rewrite, not a
+> live status board — do not read them as current. As of 2026-08-17 the catalog holds 70
+> services, 10 have a purpose-built React console, and console browser tests number 26
+> (three shell-level flows; see the Phase 3a note and the 2026-08-17 session entry).
+
 So: API coverage is genuinely strong; **console coverage is effectively zero**. Plan in
 Phase 3.
 
@@ -378,6 +384,20 @@ Per T1 service: inventory loads, create flow, detail drill-in, edit, delete, emp
 error state. Because the console uses the AWS SDK, each test transitively validates the
 wire protocol.
 
+*Partially started (2026-08-17).* The harness exists (`console/playwright.config.ts`,
+`console/e2e/`) and three shell-level flows are covered by 26 specs: identity/account
+switching, the service list, and the CloudShell terminal. Two things are deliberately
+**not** yet done, and the distinction matters:
+
+- Those specs stub the two LCS-native endpoints (`/_lcs/console/summary`,
+  `/_lcs/cloudshell/status`) in the browser, so they run with no emulator, no Maven
+  build, and no Docker. They validate console behaviour only. **They do not exercise the
+  AWS wire protocol**, so the "each test transitively validates the wire protocol"
+  benefit above is still unrealised — that requires the real-container variant, which
+  reuses the same specs and changes only the fixture.
+- No per-service flow (inventory / create / detail / edit / delete) is covered for any of
+  the ten built services. That is the bulk of 3a and remains open.
+
 **3b — Console↔API state assertions.** The parity rubric requires "executable validation
 proving the console action matches API state". Pattern: perform the action in the browser,
 then assert via CLI/SDK out-of-band. Codify as a shared helper.
@@ -467,7 +487,10 @@ Built and verified against a running emulator:
 | `ConsoleUiRoute` — SPA fallback so deep links and refresh work | Done |
 | Production image serving the console at `/_lcs/ui/` | Done, verified |
 | Side-by-side AWS parity evidence capture | **Not started** |
-| Playwright console E2E | **Not started** |
+| Playwright console E2E — harness | Done |
+| Playwright console E2E — shell flows (identity, service list, CloudShell) | Done, 26 specs |
+| Playwright console E2E — per-service flows | **Not started** |
+| Playwright console E2E — against a real LCS container | **Not started** |
 
 Verified end to end: a bucket created through the browser UI (via `@aws-sdk/client-s3`)
 was immediately visible to `aws s3 ls`. That is the console↔API assertion pattern
@@ -640,6 +663,9 @@ Nothing here adds a feature; it establishes that what is already built actually 
 2. Sweep for remaining Query-protocol member-name defects across all 70 services.
 3. Playwright E2E for the console: per T1 service, inventory / create / detail / edit /
    delete / empty / error, plus the console↔API out-of-band assertion from Phase 3b.
+   The harness and three shell-level flows landed 2026-08-17 (26 specs); the per-service
+   work below is untouched, and nothing yet runs against a real container, so no console
+   test currently exercises the wire protocol.
 4. Capture AWS side-by-side parity evidence for the 10 built services.
 
 **Track B — finish the 10 (the "100% pass" already agreed).**
@@ -707,7 +733,8 @@ Parallel, independent of console work:
 
 - Phase 2a — edge-router request classifier, validated against the existing 1,968-test
   corpus before any process split.
-- Playwright E2E for console flows.
+- Playwright E2E for console flows — harness and the three shell flows are done; the
+  per-service flows and the real-container run are not.
 - AWS side-by-side parity evidence for the S3 screens (needs manual screenshots).
 
 ---
@@ -1008,9 +1035,13 @@ Built and working end to end; these are the gaps against AWS, all deliberate.
 - **AWS config with no LCS meaning is not offered** rather than accepted and ignored:
   instance type, subnet/VPC/security group, EBS size. "Create VPC environment" is shown
   disabled — LCS models VPCs as metadata, with no network to place a shell into.
-- **No Playwright coverage**, in common with the rest of the console. Verified by a scripted
-  WebSocket client (`websockets` + the documented frame protocol), which is a good pattern
-  to keep but is not a browser test.
+- **Playwright coverage landed 2026-08-17** (`console/e2e/cloudshell.spec.ts`, 8 specs).
+  Covers all four transport paths — backend unavailable, a legacy build answering the
+  status path with index.html, LCS unreachable, and a mocked gateway WebSocket asserting
+  the `session.ts` frame format in both directions — plus session-id reuse across reload,
+  the welcome dialog, and Region-titled tabs. The scripted `websockets` client remains
+  useful against a real backend; the browser test is what was missing.
+  Still uncovered: file upload/download, restart/delete, split panes, and fullscreen.
 - Terminal font/theme are not user-configurable; AWS's CloudShell settings dialog exposes
   both. Ours reports configuration rather than changing it.
 
@@ -1018,7 +1049,9 @@ Built and working end to end; these are the gaps against AWS, all deliberate.
 - No delete/edit actions on most detail pages.
 - No tag editing anywhere (tags are read-only) — RDS create is the one place tags can be
   set, and only at creation time.
-- No Playwright E2E coverage for any console flow.
+- No Playwright E2E coverage for any *per-service* flow. The shell-level flows (identity/
+  account, service list, CloudShell) were covered 2026-08-17; every service's inventory /
+  create / detail / edit / delete path is still untested in a browser.
 - **Greying vs omitting.** RDS and CloudFormation grey out AWS entries LCS cannot back;
   the six services built before them (S3, EC2, IAM, Lambda, DynamoDB, SQS, SNS,
   CloudWatch) omit them instead. Those eight should be revisited to use
@@ -1064,8 +1097,11 @@ Ordered by what blocks a release, not by size.
 3. **Sweep for remaining Query-protocol member-name defects** across all 70 services (see
    the wire-format section above). Four have been found by accident; there is no reason to
    think that is all of them.
-4. **Playwright console E2E** — still zero coverage for any console flow, which is the gap
-   Phase 3a exists to close. The console is currently only ever tested by hand.
+4. **Playwright console E2E** — harness plus three shell-level flows landed 2026-08-17
+   (26 specs, `console/e2e/`). The remainder of Phase 3a is still open: no per-service
+   flow is covered for any of the ten built services, and nothing runs against a real
+   LCS container, so no console test yet exercises the AWS wire protocol. Per-service
+   screens are still only ever tested by hand.
 5. **AWS side-by-side parity evidence** — still not captured for any service, so
    `aws-console-parity.md`'s bar is unmet by its own definition. Needs manual screenshots.
 
@@ -1161,6 +1197,56 @@ type-checking passed straight over:
   `InternalFailure: Cannot invoke "String.contains(...)" because "roleArn" is null`.
   CloudShell just made it the *first* command a user runs. Roleless sessions now resolve to
   the account root ARN, which is what the handler already fell back to for unknown callers.
+
+### Session 2026-08-17 — Playwright harness + first three console E2E flows
+
+Closed the "zero browser coverage" half of Phase 3a. Before this the console had no
+browser test of any kind: Playwright was absent from `console/package.json` and
+`node_modules`, with no config and no spec directory.
+
+**Landed.** `console/playwright.config.ts`, `console/e2e/fixtures.ts`, and 26 specs
+across three flows — identity/account (10), service list (8), CloudShell (8). Every
+key assertion was verified to fail when the behaviour it guards is reintroduced as a
+bug, per the working agreement above.
+
+**Deliberate scope limit.** The fixture stubs `/_lcs/console/summary` and
+`/_lcs/cloudshell/status` in the browser, so the suite needs no emulator, no Maven
+build, and no Docker. The cost is that it proves console behaviour and *not* the wire
+format. The real-container variant reuses these specs and changes only the fixture;
+until it exists, no console test validates the SDK path.
+
+**"Login" does not exist.** The brief asked for a login flow; LCS has no
+authentication, and credentials are deliberately non-secret. The flow was scoped to the
+real analogue — the region/account switcher, where an exactly-12-digit access key
+selects the account and drives resource isolation.
+
+**Bugs found while writing the tests, all still open:**
+
+- **Anchor hrefs ignore the router basename.** `main.tsx` sets
+  `basename="/_lcs/ui"`, but `AllServicesPage.tsx:83` builds its href from `servicePath`
+  alone, with no basename prefix, and `AppShell`'s SideNavigation does the same, so the
+  rendered anchors read `/s3`, `/opensearch`. Left-click works because `onFollow`
+  preventDefaults; middle-click, Ctrl+click and "Copy link address" leave the console.
+  Since LCS serves path-style S3 at `/`, `/s3` in a new tab hits the bucket API — the
+  same collision commit `dc674021` already fought once.
+- **CloudShell can pin its container to the wrong Region.** The mount effect at
+  `CloudShellPage.tsx:135` has `[]` deps and captures `region` from `EmulatorContext`'s
+  *initial* state, before the summary resolves. With a 400ms summary delay and a direct
+  deep-link, the nav reads `eu-west-1` while the tab and the gateway socket both read
+  `us-east-1`. `XtermView` deliberately does not reconnect on Region change, so the
+  container and its home volume stay wrong for the session's life. It is a race, so it
+  passes at 0ms — a real deep-link with a network round-trip is the losing case.
+- **Blank region falls back to a hardcoded `us-east-1`** (`RegionAccountModal.tsx:36`)
+  rather than `summary.defaultRegion`, while the access-key field correctly defers to
+  the summary.
+- Minor: `countText` is unconditionally `` `${n} matches` ``, so one result reads
+  "1 matches". `catalog.ts` and `AppShell.tsx` comments still claim 52/53/68 services;
+  the catalog holds 70, of which 10 have a purpose-built console.
+
+**Harness note.** Timeouts are well above Playwright's defaults on purpose: Vite serves
+unbundled ESM in dev, so a cold first navigation pulls ~250 Cloudscape modules through
+the optimizer and the `load` event lands past 30s. Warm runs take ~7s. A default-timeout
+config passes locally after the first run and fails on a fresh checkout.
 
 ## Start the environment
 
