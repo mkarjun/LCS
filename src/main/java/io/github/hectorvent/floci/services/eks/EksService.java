@@ -35,6 +35,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -52,6 +53,8 @@ public class EksService implements TagHandler {
     private final RegionResolver regionResolver;
     private final EksClusterManager clusterManager;
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
+    /** Separate from the poller so a slow container start cannot stall readiness checks. */
+    private final ExecutorService provisioner = Executors.newCachedThreadPool();
 
     @Inject
     public EksService(StorageFactory storageFactory, EmulatorConfig config,
@@ -80,6 +83,7 @@ public class EksService implements TagHandler {
     @PreDestroy
     public void shutdown() {
         poller.shutdownNow();
+        provisioner.shutdownNow();
         if (!config.services().eks().mock()) {
             for (Cluster cluster : allClusters()) {
                 clusterManager.stopCluster(cluster);
@@ -118,17 +122,32 @@ public class EksService implements TagHandler {
         if (config.services().eks().mock()) {
             cluster.setStatus(ClusterStatus.ACTIVE);
             cluster.setEndpoint("https://localhost:" + config.services().eks().apiServerBasePort());
-        } else {
-            try {
-                clusterManager.startCluster(cluster);
-            } catch (Exception e) {
-                LOG.errorv("Failed to start k3s container for cluster {0}: {1}", name, e.getMessage());
-                cluster.setStatus(ClusterStatus.FAILED);
-            }
+            storage.put(name, cluster);
+            return cluster;
         }
 
+        // Store the cluster CREATING before provisioning it: until the record is in
+        // storage, neither the duplicate check above nor the readiness poller can see it.
+        // Starting the k3s container inline also held the response open for the whole
+        // pull — long enough on a cold image for the SDK to time out and retry
+        // CreateCluster. Every retry passed the duplicate check, the retries collided on
+        // the container name, and the loser's FAILED overwrote the cluster the winner had
+        // just brought up. Real EKS is asynchronous here too: CreateCluster returns
+        // CREATING and the poller promotes the cluster to ACTIVE once k3s answers.
         storage.put(name, cluster);
+        provisioner.execute(() -> startClusterInBackground(cluster));
         return cluster;
+    }
+
+    private void startClusterInBackground(Cluster cluster) {
+        try {
+            clusterManager.startCluster(cluster);
+        } catch (Exception e) {
+            LOG.errorv("Failed to start k3s container for cluster {0}: {1}",
+                    cluster.getName(), e.getMessage());
+            cluster.setStatus(ClusterStatus.FAILED);
+            putCluster(cluster);
+        }
     }
 
     public Cluster describeCluster(String name) {
