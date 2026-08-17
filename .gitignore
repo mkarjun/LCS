@@ -44,3 +44,7 @@ scripts/node_modules/
 # Python tooling caches
 __pycache__/
 *.pyc
+
+# Knowledge-graph output from the graphify skill. Kept local: graph.json alone is
+# 88MB and cache/ another 154MB, against a 54MB .git. Regenerate with /graphify.
+graphify-out/
