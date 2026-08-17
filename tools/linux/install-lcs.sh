@@ -58,6 +58,12 @@ done
 
 # ── Environment ───────────────────────────────────────────────────────────────
 
+# $USER is set by login shells, and this script runs in plenty of things that are not
+# one: `curl | bash` from cloud-init, a provisioning step, a container. With `set -u`
+# an unset $USER aborted the run at the plan screen, before anything was installed --
+# which is to say the documented unattended install could not work.
+USER="${USER:-$(id -un)}"
+
 # sudo is only ever used for the package manager and the docker group. Everything else
 # runs as the invoking user, so the launcher and desktop entry land in the right home.
 SUDO=''
