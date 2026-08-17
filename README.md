@@ -32,11 +32,11 @@ LCS is built on the Floci codebase (originally MIT-licensed) and is distributed 
 Apache-2.0, with upstream attribution preserved (see [License](#license)). It is growing
 into its own product — a full AWS-replica console, and its own execution work over time.
 
-> **Repository note.** Images are published to Docker Hub as `mkarjun/lcs`. Release tags
-> are `:latest` and the version (`:1.5.34`), with `-compat` variants and a `:nightly`
-> built from the tip of `main`. Where an absolute docs URL would normally appear this
-> README still omits it — nothing here points at an upstream repository as though it were
-> this project's.
+> **Repository note.** LCS publishes to Docker Hub as `mkarjun/lcs` — `:latest` and the
+> version (`:1.5.34`), with `-compat` variants and a `:nightly` from the tip of `main`.
+> Releases are cut by pushing a version tag; see [docs/releasing.md](docs/releasing.md).
+> Where an absolute docs URL would normally appear this README still omits it — nothing
+> here points at an upstream repository as though it were this project's.
 
 ## Install
 
