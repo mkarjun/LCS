@@ -20,6 +20,15 @@ public class S3VirtualHostFilter implements ContainerRequestFilter {
 
     public static final String INTERNAL_LIST_BUCKETS_SEGMENT = "__s3_root__";
 
+    /**
+     * Marks a virtual-hosted-style request that {@link S3RootListBucketsRoute} already
+     * rewrote to path-style at the Vert.x layer. The bucket is in the path, so this
+     * filter must strip the marker rather than prepend the bucket a second time.
+     */
+    public static final String INTERNAL_VHOST_SEGMENT = "__s3_vhost__";
+
+    private static final String INTERNAL_VHOST_PREFIX = "/" + INTERNAL_VHOST_SEGMENT;
+
     private final String baseHostname;
 
     @Inject
@@ -36,6 +45,13 @@ public class S3VirtualHostFilter implements ContainerRequestFilter {
 
     @Override
     public void filter(ContainerRequestContext requestContext) {
+        // Requests already resolved to a bucket at the Vert.x layer carry the bucket in
+        // the path. Strip the marker and dispatch as-is. This runs ahead of the guards
+        // below because the routing decision was already made from the Host header.
+        if (stripVirtualHostMarker(requestContext)) {
+            return;
+        }
+
         String host = requestContext.getHeaderString("Host");
         if (host == null) return;
 
@@ -81,6 +97,51 @@ public class S3VirtualHostFilter implements ContainerRequestFilter {
                 .build();
 
         requestContext.setRequestUri(newUri);
+    }
+
+    /**
+     * Rewrites {@code /__s3_vhost__/<bucket>[/key]} back to {@code /<bucket>[/key]}.
+     * Returns true when the marker was present and the request URI was replaced.
+     */
+    private static boolean stripVirtualHostMarker(ContainerRequestContext requestContext) {
+        URI uri = requestContext.getUriInfo().getRequestUri();
+        String path = uri.getRawPath();
+        if (path == null || !path.startsWith(INTERNAL_VHOST_PREFIX + "/")) {
+            return false;
+        }
+        requestContext.setRequestUri(UriBuilder.fromUri(uri)
+                .replacePath(path.substring(INTERNAL_VHOST_PREFIX.length()))
+                .build());
+        return true;
+    }
+
+    /**
+     * Returns the bucket addressed by a virtual-hosted-style Host header, or null when
+     * the request is path-style and the path names the bucket (or the service root).
+     */
+    String bucketFor(String host) {
+        return extractBucket(host, baseHostname);
+    }
+
+    /**
+     * True when the Host names the S3 service endpoint itself — {@code s3.<base>},
+     * {@code s3.<region>.<base>}, {@code s3.localhost.localstack.cloud} — rather than a
+     * bucket. On such a host "/" is the S3 service root, so a GET there is ListBuckets
+     * whether or not the caller signed the request.
+     */
+    boolean isS3ServiceEndpoint(String host) {
+        if (host == null) {
+            return false;
+        }
+        String hostname = stripPort(host);
+        int firstDot = hostname.indexOf('.');
+        if (firstDot <= 0) {
+            return false;
+        }
+        return isS3ServiceEndpointHost(
+                hostname.substring(0, firstDot),
+                hostname.substring(firstDot + 1),
+                baseHostname);
     }
 
     static boolean isPathStyleListBucketsRequest(String method, String path, String auth) {
