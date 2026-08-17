@@ -658,8 +658,19 @@ What remains splits into three tracks that do not block each other.
 **Track A — prove what exists (highest priority, blocks any public release).**
 Nothing here adds a feature; it establishes that what is already built actually works.
 
-1. Run the five unrun compatibility suites (Python, AWS CLI, Go, Rust, Java). Node is the
-   only one ever run, and not since the emulator fixes.
+1. ~~Run the five unrun compatibility suites (Python, AWS CLI, Go, Rust, Java). Node is the
+   only one ever run, and not since the emulator fixes.~~ **Corrected 2026-08-17.** This
+   was wrong. `.github/workflows/compatibility.yml` runs a matrix of eight — node, python,
+   java, go, awscli, cdk, terraform, opentofu — so they do run. There is no Rust suite in
+   the repository at all, so it cannot be "unrun".
+
+   The real gap is the trigger: `on: pull_request` with path filters, and nothing else.
+   Work pushed straight to `main` never runs them, which is how this branch has been
+   working. So the suites are wired and have passed, but not necessarily against the tip
+   of `main` — which is exactly the "ran before the emulator fixes" worry.
+
+   What to do: add a `push: branches: [main]` trigger (or a schedule) so direct pushes are
+   covered, then confirm a green run against current `main` before release.
 2. Sweep for remaining Query-protocol member-name defects across all 70 services.
 3. Playwright E2E for the console: per T1 service, inventory / create / detail / edit /
    delete / empty / error, plus the console↔API out-of-band assertion from Phase 3b.
