@@ -18,7 +18,7 @@
 #   --skip-docker        fail rather than install Docker
 #   --no-start           install but do not start LCS
 #   --prefix <dir>       install root (default /usr/local, or ~/.local without root)
-#   --image <tag>        LCS image (default lcs/lcs:merged)
+#   --image <tag>        LCS image (default mkarjun/lcs:latest)
 
 set -euo pipefail
 
@@ -26,7 +26,9 @@ ASSUME_YES=0
 SKIP_DOCKER=0
 NO_START=0
 PREFIX=''
-IMAGE='lcs/lcs:merged'
+IMAGE='mkarjun/lcs:latest'
+# What local builds were tagged before the image had a published home.
+LEGACY_IMAGE='lcs/lcs:merged'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -226,10 +228,22 @@ install_docker_rpm() {
     fi
 
     info "Distribution has no docker package; adding Docker's official repository."
-    $SUDO $PKG install -y dnf-plugins-core || true
+
     local repo_id='fedora'
     case " $DISTRO_ID $DISTRO_LIKE " in *' rhel '*|*' centos '*) repo_id='centos' ;; esac
-    $SUDO $PKG config-manager --add-repo "https://download.docker.com/linux/${repo_id}/docker-ce.repo"
+
+    # Fetch the .repo file rather than driving config-manager. dnf5 -- Fedora 41 and
+    # later, which is every supported Fedora -- renamed `config-manager --add-repo` to
+    # `config-manager addrepo --from-repofile=`, and the old spelling does not fail
+    # softly: it aborts the install after dnf-plugins-core has already pulled in ~80
+    # packages, so it looks like it is working right up until it isn't. Downloading the
+    # file works on dnf4, dnf5 and yum alike, needs no plugin, and is what the apt path
+    # next door already does.
+    command -v curl >/dev/null 2>&1 || $SUDO $PKG install -y curl
+    $SUDO install -d -m 0755 /etc/yum.repos.d
+    curl -fsSL "https://download.docker.com/linux/${repo_id}/docker-ce.repo" \
+        | $SUDO tee /etc/yum.repos.d/docker-ce.repo >/dev/null
+
     $SUDO $PKG install -y docker-ce docker-ce-cli containerd.io
 }
 
@@ -320,7 +334,23 @@ install_image() {
         return 0
     fi
 
-    warn "Image '$IMAGE' is not present, and no lcs-image.tar beside this installer."
+    # The bundled installers ship a tar; the bare `curl | bash` install has
+    # nothing, and before the image had a published home this is where that
+    # install gave up and told you to go build it yourself.
+    info "Pulling $IMAGE - this takes a minute."
+    if $docker_cmd pull "$IMAGE"; then
+        ok 'Image pulled.'
+        return 0
+    fi
+
+    if $docker_cmd image inspect "$LEGACY_IMAGE" >/dev/null 2>&1; then
+        warn "Could not reach the registry; using the local $LEGACY_IMAGE instead."
+        IMAGE="$LEGACY_IMAGE"
+        return 0
+    fi
+
+    warn "Image '$IMAGE' is not present, could not be pulled, and there is no"
+    warn 'lcs-image.tar beside this installer.'
     warn 'Build it from a checkout of the LCS repository:'
     warn "    docker build -f docker/Dockerfile -t $IMAGE ."
     warn 'Everything else is installed; LCS will start once the image exists.'
