@@ -190,3 +190,23 @@ jobs:
             vcs-ref=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ── Keep the Docker Hub page in step with the release ────────────────────────
+  # The overview is the shop window and is the first thing anyone pulling the
+  # image reads. Syncing it from a file in the repository means it is versioned
+  # and reviewed like everything else, rather than pasted into a web form once
+  # and left to rot.
+  dockerhub-description:
+    name: Sync the Docker Hub overview
+    needs: push-native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+
+      - uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.LCS_REPO }}
+          short-description: 'A free, local AWS emulator with a real console. No account, no auth token, no feature gates.'
+          readme-filepath: ./docs/dockerhub-overview.md
