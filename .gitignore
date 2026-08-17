@@ -39,6 +39,11 @@ src/main/resources/META-INF/resources/_lcs/ui/
 # The console lock file is committed for reproducible `npm ci` builds,
 # overriding the blanket package-lock.json rule above.
 !console/package-lock.json
+# Playwright E2E artifacts. `test-results` is already covered by the blanket rule
+# above; these are the reporter and browser-cache outputs it does not catch.
+console/playwright-report/
+console/blob-report/
+console/.playwright/
 scripts/node_modules/
 
 # Python tooling caches
