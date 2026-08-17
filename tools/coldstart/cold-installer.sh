@@ -42,7 +42,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && { pwd -W 2>/dev/null |
 WORK_DIR="${COLD_WORK_DIR:-${TMPDIR:-/tmp}/lcs-coldstart}"
 TAR="$WORK_DIR/lcs-image.tar"
 REPORT="$WORK_DIR/cold-installer-report.txt"
-IMAGE="${COLD_IMAGE:-lcs/lcs:merged}"
+IMAGE="${COLD_IMAGE:-mkarjun/lcs:latest}"
 
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
@@ -194,10 +194,22 @@ run_distro() {
     fi
 
     if [[ "$with_image" == '0' ]]; then
-        # The path a user takes when they run the bare script with no bundle.
-        # It must fail informatively rather than silently.
-        if echo "$out" | grep -q 'not present, and no lcs-image.tar'; then
-            pass 'with no image and no tar, the installer says so instead of failing silently'
+        # The path a user takes when they run the bare script with no bundle:
+        # it should reach for the registry, and if that fails say so rather
+        # than dying or leaving a half-install behind.
+        if echo "$out" | grep -qi 'Pulling '; then
+            pass 'with no tar, the installer tries the registry'
+        else
+            fail 'the installer never attempted a registry pull'
+        fi
+
+        # Until an image is actually published this is the expected outcome, so
+        # either wording counts: pulled, or reported that it could not.
+        if echo "$out" | grep -q 'Image pulled'; then
+            pass 'the image was pulled from the registry'
+        elif echo "$out" | grep -q 'could not be pulled'; then
+            pass 'the pull failed and the installer said so instead of failing silently'
+            note 'nothing is published yet, so this is the expected result today'
         else
             fail 'the missing-image path did not produce its documented warning'
         fi

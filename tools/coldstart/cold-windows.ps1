@@ -176,7 +176,7 @@ Write-Step 'Driving the installed lcs command'
 
 $lcs = Join-Path $InstallDir 'lcs.cmd'
 if (Test-Path $lcs) {
-    $image = if ($env:COLD_IMAGE) { $env:COLD_IMAGE } else { 'lcs/lcs:merged' }
+    $image = if ($env:COLD_IMAGE) { $env:COLD_IMAGE } else { 'mkarjun/lcs:latest' }
     $haveImage = $(docker image inspect $image 2>$null; $LASTEXITCODE -eq 0)
 
     if (-not $haveImage) {

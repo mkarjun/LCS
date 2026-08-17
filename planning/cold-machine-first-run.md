@@ -46,7 +46,7 @@ so the guard is real rather than assumed.
 
 This is the one finding that would have shipped as a broken install.
 
-### 2. The Fedora install path uses dnf4 syntax and fails on dnf5 — NOT FIXED
+### 2. The Fedora install path uses dnf4 syntax and fails on dnf5 — FIXED
 
 `install_docker_rpm` in `tools/linux/install-lcs.sh` adds Docker's repository with:
 
@@ -68,13 +68,22 @@ installed, the launcher is never installed, and nothing is cleaned up.
 Fedora 41, 42 and 43 are all dnf5, so this is every currently supported Fedora.
 RHEL/CentOS take the same branch and should be checked against their dnf version.
 
-The dnf5 form is `config-manager addrepo --from-repofile=<url>`. The
-version-independent alternative is to write the `.repo` file directly, which
-works on both. Left unfixed deliberately — unlike finding #1 it does not block
-the test harness, so it is a decision about product code rather than a
-prerequisite for testing.
+Fixed by fetching the `.repo` file directly with `curl` instead of driving
+`config-manager` at all. That works on dnf4, dnf5 and yum alike, needs no
+`dnf-plugins-core`, and matches what the apt path next door already does.
 
-### 3. The README tells a cold user to run an image that does not exist
+Re-run after the fix, on the same Fedora 41 image that failed:
+
+```
+PASS  the installer ran to completion in 134s (exit 0)
+PASS  Docker was installed by the installer (Docker version 29.3.0, build 5927d80)
+PASS  the lcs launcher is installed at /usr/local/bin/lcs
+PASS  the desktop entry was written to ~/.local/share/applications
+```
+
+Seen failing before, passing after — a real guard.
+
+### 3. The README tells a cold user to run an image that does not exist — ADDRESSED IN CODE, NEEDS A PUSH
 
 `README.md` names `lcs/lcs:latest` in four places (Quick Start, both Compose
 examples, the Kubernetes snippet) and `lcs/lcs:dev` in the options table. Every
@@ -89,8 +98,30 @@ FAIL  docker pull lcs/lcs:latest failed -- no registry serves this tag
 ```
 
 A user who follows the Quick Start on a cold machine gets an image-not-found
-error as their first experience of the product. Either the README must stop
-promising a registry pull until one exists, or the tag has to be published.
+error as their first experience of the product.
+
+**Resolved by giving LCS a registry home.** Docker Hub `mkarjun/lcs` is now the
+one name: `release.yml` and `nightly.yml` publish there, the README and examples
+name it, and both launchers and both installers default to it. The Linux
+launcher and installer gained a `docker pull` step they never had — previously
+the only ways to obtain the image were a local build or a tarball, which is
+precisely why the documented first command could not work.
+
+`lcs/lcs:merged` survives as the local build tag and as an offline fallback, so
+a checkout built the old way keeps working.
+
+**This is not finished until an image is actually pushed.** Nothing is published
+yet, so `docker pull mkarjun/lcs:latest` still fails. What remains is manual and
+deliberately left to the maintainer:
+
+1. Create the `mkarjun/lcs` repository on Docker Hub.
+2. Add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token with
+   Read/Write, not the account password) as Actions secrets on the LCS repo.
+3. Push a version tag; `release.yml` builds multi-arch and publishes.
+
+To publish under a different name, set the `DOCKERHUB_REPO` Actions variable —
+both workflows read it and fall back to `mkarjun/lcs` — and update the README
+and the four launcher/installer defaults.
 
 ### 4. The Windows installer ships no uninstaller
 

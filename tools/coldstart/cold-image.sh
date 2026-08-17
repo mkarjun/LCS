@@ -23,7 +23,7 @@ set -uo pipefail
 CHANNEL="${1:-tar}"
 DAEMON="${COLD_DAEMON:-lcs-cold-daemon}"
 CONTAINER='lcs'
-IMAGE="${COLD_IMAGE:-lcs/lcs:merged}"
+IMAGE="${COLD_IMAGE:-mkarjun/lcs:latest}"
 HOST_PORT="${COLD_HOST_PORT:-14566}"
 # What the tar channel exports when it has to build the tar itself. This is the
 # tag the local build produces; the bundle is made from it.

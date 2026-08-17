@@ -115,7 +115,7 @@ the installation in place.
 | Variable | Applies to | Meaning |
 |---|---|---|
 | `COLD_WORK_DIR` | all | Where the image tar, logs and reports go |
-| `COLD_IMAGE` | all | Image tag to run (default `lcs/lcs:merged`) |
+| `COLD_IMAGE` | all | Image tag to run (default `mkarjun/lcs:latest`) |
 | `COLD_KEEP=1` | layer 1 | Leave the nested daemon running for inspection |
 | `COLD_HOST_PORT` | layer 1 | Host port for the console (default `14566`) |
 | `COLD_READY_TIMEOUT` | layer 1 | Seconds to wait for a cold start (default `300`) |
