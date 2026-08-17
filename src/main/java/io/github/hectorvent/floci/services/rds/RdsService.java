@@ -70,6 +70,13 @@ public class RdsService implements Resettable {
     private final Set<Integer> usedPorts = ConcurrentHashMap.newKeySet();
     private static final Pattern IMAGE_TAG_VERSION_PATTERN = Pattern.compile("^(\\d+(?:\\.\\d+)*)(.*)$");
     private static final Pattern SAFE_IMAGE_TAG_PATTERN = Pattern.compile("[A-Za-z0-9._-]+");
+    /**
+     * Aurora reports engine versions like {@code 8.0.mysql_aurora.3.08.0} — the underlying
+     * engine version, then the Aurora release that wraps it. Only the prefix names a real
+     * container image tag, so the Aurora part is stripped before the tag is built.
+     */
+    private static final Pattern AURORA_ENGINE_VERSION_PATTERN =
+            Pattern.compile("^(\\d+(?:\\.\\d+)*)\\.(?:mysql|postgresql)_aurora\\..*$");
 
     @Inject
     public RdsService(RdsContainerManager containerManager,
@@ -1051,6 +1058,12 @@ public class RdsService implements Resettable {
         }
 
         String requestedTag = engineVersion.trim();
+        Matcher aurora = AURORA_ENGINE_VERSION_PATTERN.matcher(requestedTag);
+        if (aurora.matches()) {
+            // Without this, an aurora-mysql cluster asks for mysql:8.0.mysql_aurora.3.08.0
+            // and the pull 404s, so CreateDBCluster fails for every Aurora engine version.
+            requestedTag = aurora.group(1);
+        }
         if (!SAFE_IMAGE_TAG_PATTERN.matcher(requestedTag).matches()) {
             throw new AwsException("InvalidParameterValue",
                     "Unsupported engine version tag: " + engineVersion, 400);
