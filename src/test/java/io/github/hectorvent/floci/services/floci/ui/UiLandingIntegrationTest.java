@@ -8,24 +8,38 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 
 /**
- * Verifies the browser landing page content-negotiation on {@code /} and the
- * {@code /_floci/ui/status} contract. These do not spawn the sidecar (only
- * {@code GET /_floci/ui} does), so they need no Docker.
+ * Verifies the browser/SDK content-negotiation on {@code /} and the
+ * {@code /_floci/ui/status} contract. A browser is redirected to the console;
+ * an SDK or CLI caller still gets ListBuckets XML from the same path. These do
+ * not spawn the sidecar (only {@code GET /_floci/ui} does), so they need no Docker.
  */
 @QuarkusTest
 class UiLandingIntegrationTest {
 
     @Test
-    void browserAcceptHtmlGetsLandingPage() {
+    void browserAcceptHtmlIsRedirectedToTheConsole() {
         given()
             .accept("text/html")
+            .redirects().follow(false)
         .when()
             .get("/")
         .then()
+            // 302 and not 301: "/" is also the S3 service endpoint, so a browser must
+            // never cache this as a permanent move.
+            .statusCode(302)
+            .header("Location", containsString("/_lcs/ui/"));
+    }
+
+    @Test
+    void consoleIsServedAtTheRedirectTarget() {
+        // Guards the redirect against pointing at a path nothing serves.
+        given()
+            .accept("text/html")
+        .when()
+            .get("/_lcs/ui/")
+        .then()
             .statusCode(200)
-            .contentType(containsString("text/html"))
-            .body(containsString("Floci"))
-            .body(containsString("Open Floci UI"));
+            .body(containsString("<div id=\"root\">"));
     }
 
     @Test

@@ -29,6 +29,7 @@ import io.github.hectorvent.floci.services.s3.model.S3Checksum;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import io.github.hectorvent.floci.services.s3.model.TopicNotification;
 import io.github.hectorvent.floci.services.s3.model.WebsiteConfiguration;
+import java.net.URI;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
@@ -74,6 +75,8 @@ import org.jboss.resteasy.reactive.server.ServerExceptionMapper;
 public class S3Controller {
 
     private static final Logger LOG = Logger.getLogger(S3Controller.class);
+    /** Canonical console URL. Browsers hitting "/" are redirected here. */
+    private static final String CONSOLE_PATH = "/_lcs/ui/";
     private static final DateTimeFormatter ISO_FORMAT = DateTimeFormatter
             .ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
             .withZone(ZoneId.of("UTC"));
@@ -96,7 +99,6 @@ public class S3Controller {
     private final RegionResolver regionResolver;
     private final SnsQueryHandler snsQueryHandler;
     private final io.quarkus.vertx.http.runtime.CurrentVertxRequest currentVertxRequest;
-    private final io.github.hectorvent.floci.services.floci.ui.UiPages uiPages;
     private final CloudTrailService cloudTrailService;
     private final AccountResolver accountResolver;
     private final RequestContext requestContext;
@@ -106,7 +108,6 @@ public class S3Controller {
                         RegionResolver regionResolver,
                         SnsQueryHandler snsQueryHandler,
                         io.quarkus.vertx.http.runtime.CurrentVertxRequest currentVertxRequest,
-                        io.github.hectorvent.floci.services.floci.ui.UiPages uiPages,
                         CloudTrailService cloudTrailService,
                         AccountResolver accountResolver,
                         RequestContext requestContext) {
@@ -115,7 +116,6 @@ public class S3Controller {
         this.regionResolver = regionResolver;
         this.snsQueryHandler = snsQueryHandler;
         this.currentVertxRequest = currentVertxRequest;
-        this.uiPages = uiPages;
         this.cloudTrailService = cloudTrailService;
         this.accountResolver = accountResolver;
         this.requestContext = requestContext;
@@ -207,11 +207,16 @@ public class S3Controller {
             String region = AwsArnUtils.regionOrDefault(snsArn, regionResolver.resolveRegion(httpHeaders));
             return snsQueryHandler.handle(action, queryParams, region);
         }
-        // A browser hitting the root endpoint (Accept: text/html) gets the Floci
-        // landing page; SDK/CLI callers (no Accept, */*, or an XML/JSON Accept) fall
-        // through to the normal S3 ListBuckets behavior untouched.
+        // A browser hitting the root endpoint (Accept: text/html) is redirected to
+        // the console; SDK/CLI callers (no Accept, */*, or an XML/JSON Accept) fall
+        // through to the normal S3 ListBuckets behavior untouched. The console keeps a
+        // single canonical URL under /_lcs/ui/ rather than being served from "/" as
+        // well, because path-style S3 owns "/{bucket}/{key}".
+        //
+        // 302 and never 301: "/" is also the S3 service endpoint, and a permanent
+        // redirect cached by a browser would follow that origin around.
         if (accept != null && accept.contains(MediaType.TEXT_HTML)) {
-            return Response.ok(uiPages.landingHtml(), MediaType.TEXT_HTML).build();
+            return Response.status(Response.Status.FOUND).location(URI.create(CONSOLE_PATH)).build();
         }
         try {
             List<Bucket> buckets = s3Service.listBuckets();

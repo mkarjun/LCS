@@ -7,29 +7,20 @@ import java.nio.charset.StandardCharsets;
 import jakarta.enterprise.context.ApplicationScoped;
 
 /**
- * Loads and caches the small embedded HTML pages served to browsers: the Floci
- * landing page and the "starting the UI" interstitial. Resources are read from
- * the classpath ({@code ui/*.html}) and must be registered in
- * {@code quarkus.native.resources.includes} so they are embedded in the native
- * image.
+ * Loads and caches the "starting the UI" interstitial served to browsers hitting
+ * {@code /_floci/ui}. The resource is read from the classpath ({@code ui/*.html})
+ * and must be registered in {@code quarkus.native.resources.includes} so it is
+ * embedded in the native image.
+ *
+ * <p>There is no longer a landing page: {@code /} redirects browsers straight to
+ * the console at {@code /_lcs/ui/}.
  */
 @ApplicationScoped
 public class UiPages {
 
-    private static final String LANDING_RESOURCE = "ui/index.html";
     private static final String STARTING_RESOURCE = "ui/starting.html";
 
-    private volatile String landing;
     private volatile String starting;
-
-    public String landingHtml() {
-        String result = landing;
-        if (result == null) {
-            result = readResource(LANDING_RESOURCE);
-            landing = result;
-        }
-        return result;
-    }
 
     public String startingHtml() {
         String result = starting;
