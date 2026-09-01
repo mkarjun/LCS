@@ -10,7 +10,7 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 
 import { useEmulator } from "@platform/EmulatorContext";
-import { findByPath } from "@services/catalog";
+import { emulatorServiceId, findByPath } from "@services/catalog";
 import { useBreadcrumbs } from "./BreadcrumbContext";
 import { NotFoundPage } from "./NotFoundPage";
 import { recordVisit } from "./recentlyVisited";
@@ -41,7 +41,7 @@ export default function ServicePlaceholderPage() {
     return <NotFoundPage />;
   }
 
-  const status = serviceStatus(entry.id);
+  const status = serviceStatus(emulatorServiceId(entry));
   const endpoint = summary?.configuredBaseUrl ?? window.location.origin;
 
   return (
@@ -76,7 +76,7 @@ export default function ServicePlaceholderPage() {
                     <StatusIndicator type="pending">Unknown</StatusIndicator>
                   ),
               },
-              { label: "Service id", value: entry.id },
+              { label: "Service id", value: emulatorServiceId(entry) },
               { label: "Category", value: entry.category },
               { label: "Region", value: region },
             ]}
@@ -89,7 +89,7 @@ export default function ServicePlaceholderPage() {
               Point the AWS CLI at the emulator endpoint:
             </Box>
             <Box variant="code" display="block">
-              aws --endpoint-url {endpoint} {entry.id} help
+              aws --endpoint-url {endpoint} {emulatorServiceId(entry)} help
             </Box>
           </SpaceBetween>
         </Container>

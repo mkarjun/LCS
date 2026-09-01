@@ -73,13 +73,28 @@ not be trusted:
 | VPCs, Subnets, Route tables, Internet gateways | Supported |
 | Security groups | Supported |
 | Network interfaces (ENI) | Supported |
-| NAT gateways, Egress-only IGW | Op unsupported |
-| Network ACLs | Op unsupported |
-| VPC peering, VPC endpoints, PrivateLink | Op unsupported |
+| NAT gateways | **Handler present** (see note) |
+| Network ACLs (incl. entries and association replace) | **Handler present** (see note) |
+| VPC endpoints | **Handler present** (see note) — `DescribeVpcEndpointServices` answers empty |
+| Flow logs (create/describe/delete) | **Handler present** (see note) |
+| Prefix lists (`DescribePrefixLists`, read-only) | **Handler present** (see note) |
+| Egress-only IGW, carrier gateways, DHCP option sets | Op unsupported |
+| VPC peering, PrivateLink, IPAM | Op unsupported |
 | Transit Gateway, VGW, Site-to-Site VPN, Client VPN | Op unsupported |
-| Prefix lists, DHCP option sets, Flow logs, IPAM | Op unsupported |
 | Direct Connect, VPC Lattice, Traffic Mirroring | Not emulated |
 | Reachability / Network Access Analyzer | Not emulated |
+
+> **"Handler present" is a weaker claim than "Supported".** These five rows said
+> *Op unsupported* until 2026-09-01, when building the VPC console meant reading
+> `Ec2QueryHandler` directly: every one of them has a real dispatch case and a real XML
+> serializer. The upstream merge is the likely reason the old probe disagreed.
+>
+> They have **not** been re-probed against a running emulator — Docker was down on the
+> build host that day — so they are recorded as what the source says, not as what a
+> request has been seen to return. The `console/e2e/vpc.spec.ts` fixtures encode the exact
+> element names the handler emits and the AWS SDK parses them, which proves the console and
+> the serializer agree on the wire format, but not that a live container answers.
+> Promote these to *Supported* only after a probe against a running LCS.
 
 ## Load balancing and scaling
 

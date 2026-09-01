@@ -47,6 +47,14 @@ export const CATEGORY_ORDER: ServiceCategory[] = [
 export interface CatalogEntry {
   /** Service id from the emulator catalog. */
   id: string;
+  /**
+   * The emulator service that actually backs this console, when it is not `id`.
+   *
+   * AWS ships some consoles that have no service of their own — VPC is served by the EC2
+   * API — and the emulator reports only the real service. Set this so status lookups ask
+   * about the service that exists while the console keeps its own AWS-facing identity.
+   */
+  emulatorId?: string;
   /** AWS display name, e.g. "Amazon S3". */
   name: string;
   /** Short name used in navigation, e.g. "S3". */
@@ -128,6 +136,9 @@ export const SERVICE_CATALOG: CatalogEntry[] = [
   { id: "cloudfront", name: "Amazon CloudFront", shortName: "CloudFront", category: "Networking & Content Delivery", description: "Global content delivery network" },
   { id: "elasticloadbalancing", name: "Elastic Load Balancing", shortName: "Load Balancing", category: "Networking & Content Delivery", description: "Distribute traffic across targets", path: "elb" },
   { id: "route53", name: "Amazon Route 53", shortName: "Route 53", category: "Networking & Content Delivery", description: "Scalable DNS and domain name registration" },
+  // AWS lists VPC as its own service even though the EC2 API serves it, and so does this
+  // catalog — an AWS user looks for "VPC", not "the VPC pages of EC2".
+  { id: "vpc", emulatorId: "ec2", name: "Amazon Virtual Private Cloud", shortName: "VPC", category: "Networking & Content Delivery", description: "Isolated cloud resources" },
 
   // Security, Identity, & Compliance
   { id: "acm", name: "AWS Certificate Manager", shortName: "Certificate Manager", category: "Security, Identity, & Compliance", description: "Provision and manage SSL/TLS certificates" },
@@ -162,6 +173,11 @@ export const SERVICE_CATALOG: CatalogEntry[] = [
 
 export function servicePath(entry: CatalogEntry): string {
   return entry.path ?? entry.id;
+}
+
+/** The service id to ask the emulator's own catalog about. See `CatalogEntry.emulatorId`. */
+export function emulatorServiceId(entry: CatalogEntry): string {
+  return entry.emulatorId ?? entry.id;
 }
 
 const BY_PATH = new Map(SERVICE_CATALOG.map((entry) => [servicePath(entry), entry]));

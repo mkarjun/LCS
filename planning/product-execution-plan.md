@@ -1083,9 +1083,9 @@ Everything below is what a new session needs to continue without re-deriving any
   **Apache-2.0** (`LICENSE`); upstream Floci MIT preserved verbatim in
   `LICENSES/UPSTREAM-FLOCI-MIT.txt` + `NOTICE`. Open-core direction (free core, paid
   enterprise later). `gh` CLI not installed — PRs open via the URL git prints on push.
-- Console coverage: **all 10 core services** have real surfaces —
-  S3, EC2, IAM, Lambda, CloudWatch, DynamoDB, SQS, SNS, **RDS**, **CloudFormation**.
-  The other 60 are reachable via honest placeholder pages.
+- Console coverage: **11 services** have real surfaces —
+  S3, EC2, IAM, Lambda, CloudWatch, DynamoDB, SQS, SNS, **RDS**, **CloudFormation**, and
+  **VPC** (2026-09-01). The rest are reachable via honest placeholder pages.
 - **CloudShell is complete** (all four phases) and verified against a running emulator.
   See `planning/cloudshell.md`.
 - Upstream merged: 457 commits, 52 -> 70 services. Node compatibility suite passed
@@ -1109,10 +1109,11 @@ Ordered by what blocks a release, not by size.
    the wire-format section above). Four have been found by accident; there is no reason to
    think that is all of them.
 4. **Playwright console E2E** — harness plus three shell-level flows landed 2026-08-17
-   (26 specs, `console/e2e/`). The remainder of Phase 3a is still open: no per-service
-   flow is covered for any of the ten built services, and nothing runs against a real
-   LCS container, so no console test yet exercises the AWS wire protocol. Per-service
-   screens are still only ever tested by hand.
+   (26 specs, `console/e2e/`); VPC added the first nine per-service specs on 2026-09-01
+   (35 total). The remainder of Phase 3a is still open: ten of the eleven built services
+   have no per-service flow, and nothing runs against a real LCS container. The VPC specs
+   stub the Query endpoint with the handler's own element names, so they do pin the wire
+   format from the SDK side — but against a fixture, not a container.
 5. **AWS side-by-side parity evidence** — still not captured for any service, so
    `aws-console-parity.md`'s bar is unmet by its own definition. Needs manual screenshots.
 
@@ -1158,6 +1159,75 @@ Shipped and pushed to `mkarjun/LCS` this session:
   async destination *delivery* is not emulated (config stored, not delivered).
 - **README** rebranded Floci → LCS (upstream-specific links dropped, not repointed;
   `FLOCI_*` env vars kept verbatim with a rename note).
+
+### Session 2026-09-01 — VPC console, and the next five services
+
+**VPC has its own console now.** Until today VPC was four entries buried in the EC2 nav
+(`/ec2/vpcs`, `/ec2/subnets`, …), which is not where AWS puts them and not where an AWS
+user looks. `/vpc` is now a first-class service in the catalog and the registry, with
+AWS's own nav shape.
+
+What shipped:
+
+- **`services/ec2/vpc/`** — dashboard ("VPCs by Region" counts + Your VPCs table), the
+  inventory tables, and a VPC detail page (overview, Details/DNS settings with working
+  `ModifyVpcAttribute` toggles, CIDRs, Flow logs with delete, Tags).
+- **Four resources that had no console at all**: NAT gateways (create/delete),
+  VPC endpoints (create/delete, gateway and interface), network ACLs (create/delete),
+  and managed prefix lists (read-only — LCS has `DescribePrefixLists` but no
+  `CreateManagedPrefixList`).
+- **The EC2 nav dropped its "Virtual Private Cloud" section**, matching AWS. The
+  `/ec2/...` routes still resolve so old links do not break; nothing points at them.
+  Fixed while there: the EC2 dashboard's VPCs and Subnets tiles both linked to
+  `/ec2/network-interfaces`.
+- **Shared table machinery extracted** to `ec2/resourceTable.tsx` + `ec2/resources.tsx`.
+  Both consoles select from one definition map, so security groups / Elastic IPs /
+  network interfaces — which AWS shows in *both* consoles — are defined once.
+- **Nine E2E specs** (`console/e2e/vpc.spec.ts`), and these are the first per-service
+  flows in the suite. They stub the EC2 Query endpoint with the exact element names
+  `Ec2QueryHandler` emits, so the AWS SDK's own XML parser has to accept them.
+
+Two things worth carrying forward:
+
+- **VPC lives *inside* the ec2 module, not beside it.** The boundary rule ("a service may
+  not import from a sibling service") would have forced a copy of every resource table and
+  create modal. AWS serves the VPC console from the EC2 API and so does LCS, so one module
+  with two route trees is both less code and a truer picture of the API underneath.
+- **The guards were verified by breaking them.** Five members were deliberately mis-named
+  in the fixtures — `natGatewayAddressSet`, `entrySet`, `serviceName`,
+  `cidrBlockAssociationSet`, `prefixListSet` — and the five specs that claim to cover them
+  failed. The first pass of the network-ACL spec did *not* fail, because it asserted the
+  association count and never the entry counts its own name promised. Found only by
+  breaking it. **Write the assertion the test name claims, then break it once.**
+
+**`planning/ec2-domain-coverage.md` was wrong about five rows.** NAT gateways, network
+ACLs, VPC endpoints, flow logs, and prefix lists were all recorded *Op unsupported*; the
+handler implements every one. The doc's own STALE banner predicted this — the upstream
+merge moved them. They are now recorded as "Handler present", which is deliberately weaker
+than "Supported": Docker was down on this host, so none has been probed live.
+
+**Next five services** (Track C, agreed this session). Ordered by how often a local-dev
+user reaches for them, weighted by how much backend there is to surface:
+
+1. ~~**VPC**~~ — done, above.
+2. **API Gateway (v1 + v2 in one console, as AWS does).** 7,101 lines of backend and the
+   front door to Lambda, which already has the deepest console surface. Biggest single
+   unlock for the "build a serverless app locally" story.
+3. **EventBridge.** Buses, rules, targets. Finishes the messaging wave that SQS and SNS
+   started; `events`, `scheduler`, and `pipes` are all emulated and all placeholder-only.
+4. **Step Functions.** 4,180 lines of backend, and the state-machine graph plus execution
+   history is the most visual thing LCS could show.
+5. **Secrets Manager + KMS + Systems Manager Parameter Store.** Three small consoles, one
+   wave — the config-and-secrets trio nearly every local stack touches. Small surfaces,
+   disproportionate day-to-day use.
+
+ECS + ECR is the strongest candidate immediately behind these, and moves up if the
+container story becomes the priority — it is heavier (needs the Docker socket) and worth
+its own wave rather than a slot in this one.
+
+Standing caveat, unchanged: Track A ("prove what exists") still gates a public release.
+Widening the console does not close open items 2–5 below, and this session did not touch
+them.
 
 ### Session 2026-08-03 — CloudShell backend (phases 2–4)
 

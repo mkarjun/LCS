@@ -15,6 +15,10 @@ import ResourceListPage from "./ResourceListPage";
  * Requests, Savings Plans, Reserved Instances, Dedicated Hosts, Capacity Reservations,
  * Placement Groups, Snapshots, Lifecycle Manager — are omitted rather than rendered as
  * links that always error. See planning/ec2-domain-coverage.md.
+ *
+ * VPCs, subnets, route tables, and internet gateways are not here: AWS puts them in the
+ * VPC console and so does LCS now. Their `/ec2/...` routes still resolve so older links
+ * keep working, but the nav sends people to `/vpc`, which is where AWS sends them.
  */
 export default function Ec2Routes() {
   useEffect(() => recordVisit("ec2"), []);
@@ -73,19 +77,6 @@ export default function Ec2Routes() {
         items: [
           { type: "link", text: "Auto Scaling Groups", href: "/ec2/auto-scaling-groups" },
           { type: "link", text: "Launch Configurations", href: "/ec2/launch-configurations" },
-        ],
-      },
-      {
-        // AWS puts these in a separate VPC console. LCS keeps them here because VPC has
-        // no console surface of its own and the EC2 nav is where users look for them.
-        type: "section",
-        text: "Virtual Private Cloud",
-        defaultExpanded: true,
-        items: [
-          { type: "link", text: "Your VPCs", href: "/ec2/vpcs" },
-          { type: "link", text: "Subnets", href: "/ec2/subnets" },
-          { type: "link", text: "Route Tables", href: "/ec2/route-tables" },
-          { type: "link", text: "Internet Gateways", href: "/ec2/internet-gateways" },
         ],
       },
     ],

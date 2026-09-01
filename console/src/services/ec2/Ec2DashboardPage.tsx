@@ -133,8 +133,8 @@ export default function Ec2DashboardPage() {
               {resource("Elastic IPs", counts.elasticIps, "/ec2/elastic-ips")}
               {resource("Security groups", counts.securityGroups, "/ec2/security-groups")}
               {resource("Volumes", counts.volumes, "/ec2/volumes")}
-              {resource("VPCs", counts.vpcs, "/ec2/network-interfaces")}
-              {resource("Subnets", counts.subnets, "/ec2/network-interfaces")}
+              {resource("VPCs", counts.vpcs, "/vpc/vpcs")}
+              {resource("Subnets", counts.subnets, "/vpc/subnets")}
             </ColumnLayout>
           )}
         </Container>

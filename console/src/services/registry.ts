@@ -18,6 +18,9 @@ import type { CatalogEntry } from "./catalog";
 export const IMPLEMENTED_SERVICES: Record<string, LazyExoticComponent<ComponentType>> = {
   s3: lazy(() => import("./s3/S3Routes")),
   ec2: lazy(() => import("./ec2/Ec2Routes")),
+  // AWS serves the VPC console from the EC2 API, so its screens live inside the ec2
+  // module and share that module's resource tables, create modals, and client.
+  vpc: lazy(() => import("./ec2/vpc/VpcRoutes")),
   iam: lazy(() => import("./iam/IamRoutes")),
   lambda: lazy(() => import("./lambda/LambdaRoutes")),
   // AWS presents Logs and Metrics as one CloudWatch console, so both catalog entries

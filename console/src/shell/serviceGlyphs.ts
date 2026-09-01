@@ -50,6 +50,7 @@ const TRANSFER = "M4 8h13 M14 5l3 3-3 3 M20 16H7 M10 13l-3 3 3 3";
 const BUILD = "M14.5 4.5a4 4 0 0 0-5.3 5.3L4 15v5h5l5.2-5.2a4 4 0 0 0 5.3-5.3l-3 3-2-2z";
 const IOT = "M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z M8.5 8.5a5 5 0 0 0 0 7 M15.5 8.5a5 5 0 0 1 0 7 M6 6a9 9 0 0 0 0 12 M18 6a9 9 0 0 1 0 12";
 const GRAPH = "M6 6m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0 M18 8m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0 M9 18m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0 M8 7.2L15.5 8 M7.4 8.3l1.2 7.3";
+const CLOUD_NETWORK = "M7.5 17a4.5 4.5 0 0 1-.4-8.98 6 6 0 0 1 11.5 1.6A3.9 3.9 0 0 1 17.5 17z M12 11.5v6 M9 20.5h6 M12 20.5v-3";
 const GRAPHQL = "M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 3v18 M4 7.5l16 9 M20 7.5l-16 9";
 
 /** Per-service pictograms, keyed by the emulator's service id. */
@@ -102,6 +103,7 @@ const SERVICE_GLYPHS: Record<string, string> = {
   ecr: CONTAINER,
   autoscaling: SCALE,
   elasticloadbalancing: BALANCER,
+  vpc: CLOUD_NETWORK,
   route53: GLOBE,
   cloudfront: GLOBE,
   servicediscovery: NETWORK,
