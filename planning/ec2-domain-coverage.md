@@ -73,28 +73,40 @@ not be trusted:
 | VPCs, Subnets, Route tables, Internet gateways | Supported |
 | Security groups | Supported |
 | Network interfaces (ENI) | Supported |
-| NAT gateways | **Handler present** (see note) |
-| Network ACLs (incl. entries and association replace) | **Handler present** (see note) |
-| VPC endpoints | **Handler present** (see note) — `DescribeVpcEndpointServices` answers empty |
-| Flow logs (create/describe/delete) | **Handler present** (see note) |
-| Prefix lists (`DescribePrefixLists`, read-only) | **Handler present** (see note) |
+| NAT gateways | **Supported** (probed 2026-09-01) |
+| Network ACLs (incl. entries and association replace) | **Supported** (probed 2026-09-01) |
+| VPC endpoints | **Supported** (probed 2026-09-01) — `DescribeVpcEndpointServices` answers empty |
+| Flow logs (create/describe/delete) | Handler present, not probed |
+| Prefix lists (`DescribePrefixLists`, read-only) | **Supported** (probed 2026-09-01) |
 | Egress-only IGW, carrier gateways, DHCP option sets | Op unsupported |
 | VPC peering, PrivateLink, IPAM | Op unsupported |
 | Transit Gateway, VGW, Site-to-Site VPN, Client VPN | Op unsupported |
 | Direct Connect, VPC Lattice, Traffic Mirroring | Not emulated |
 | Reachability / Network Access Analyzer | Not emulated |
 
-> **"Handler present" is a weaker claim than "Supported".** These five rows said
-> *Op unsupported* until 2026-09-01, when building the VPC console meant reading
-> `Ec2QueryHandler` directly: every one of them has a real dispatch case and a real XML
-> serializer. The upstream merge is the likely reason the old probe disagreed.
+> **These five rows said *Op unsupported* until 2026-09-01.** Building the VPC console
+> meant reading `Ec2QueryHandler` directly, and every one of them has a real dispatch case
+> and a real XML serializer. The upstream merge is the likely reason the old probe
+> disagreed.
 >
-> They have **not** been re-probed against a running emulator — Docker was down on the
-> build host that day — so they are recorded as what the source says, not as what a
-> request has been seen to return. The `console/e2e/vpc.spec.ts` fixtures encode the exact
-> element names the handler emits and the AWS SDK parses them, which proves the console and
-> the serializer agree on the wire format, but not that a live container answers.
-> Promote these to *Supported* only after a probe against a running LCS.
+> Four are now **probed and Supported**, against `mkarjun/lcs:latest` (1.5.34) running on
+> the Docker socket, using **`@aws-sdk/client-ec2` — not the AWS CLI**, because the CLI is
+> the more forgiving parser and "the CLI shows it" is not evidence the wire format is
+> right. Write-then-read on every resource, because a read alone can fail for "not
+> configured" rather than "not implemented". 9/9 probes passed, and the members most
+> likely to be mis-named came back intact:
+>
+> | Probe | Result |
+> |---|---|
+> | `CreateNatGateway` -> `DescribeNatGateways` | `state=available`, `NatGatewayAddresses[0].AllocationId` populated |
+> | `CreateNetworkAcl` + 3x `CreateNetworkAclEntry` -> `DescribeNetworkAcls` | entries in=3 out=2 (mine plus the default deny) |
+> | `CreateVpcEndpoint` -> `DescribeVpcEndpoints` | `serviceName` and `vpcEndpointType` both parsed |
+> | `DescribePrefixLists` | 2 lists, `cidrSet` parsed |
+> | `DescribeVpcAttribute` | `EnableDnsSupport=true` |
+> | `DescribeVpcs` | `cidrBlockAssociationSet` -> `associationId` + `state` parsed |
+>
+> Flow logs stay at "Handler present": the handler is there and the console reads it, but
+> no create/delete round trip has been run, so the claim is not earned yet.
 
 ## Load balancing and scaling
 

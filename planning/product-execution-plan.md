@@ -1214,8 +1214,19 @@ it the right thing.** All four are fixed; the evidence is in `aws-console-parity
 **`planning/ec2-domain-coverage.md` was wrong about five rows.** NAT gateways, network
 ACLs, VPC endpoints, flow logs, and prefix lists were all recorded *Op unsupported*; the
 handler implements every one. The doc's own STALE banner predicted this — the upstream
-merge moved them. They are now recorded as "Handler present", which is deliberately weaker
-than "Supported": Docker was down on this host, so none has been probed live.
+merge moved them.
+
+Four are now **probed and promoted to Supported**, once Docker came back up on the host:
+`mkarjun/lcs:latest` (1.5.34) on the Docker socket, driven by `@aws-sdk/client-ec2` rather
+than the AWS CLI, write-then-read on every resource. 9/9 passed, including the members
+most likely to be mis-named on the wire —
+`NatGatewayAddresses[0].AllocationId`, network-ACL `Entries`, endpoint `ServiceName`, and
+`CidrBlockAssociationSet`. Flow logs stay at "Handler present": no create/delete round
+trip has been run, so the claim is not earned. Evidence table is in the coverage doc.
+
+**This was also the first time the VPC console ran against a real emulator**, and it
+worked end to end — dashboard counts, inventory tables, detail page, and the resource map
+correctly marking one subnet public (0.0.0.0/0 -> igw) and one private.
 
 **Next five services** (Track C, agreed this session). Ordered by how often a local-dev
 user reaches for them, weighted by how much backend there is to surface:
