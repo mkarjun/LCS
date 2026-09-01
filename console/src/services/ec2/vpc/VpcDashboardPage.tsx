@@ -5,6 +5,7 @@ import {
   DescribeInternetGatewaysCommand,
   DescribeNatGatewaysCommand,
   DescribeNetworkAclsCommand,
+  DescribePrefixListsCommand,
   DescribeRouteTablesCommand,
   DescribeSecurityGroupsCommand,
   DescribeSubnetsCommand,
@@ -13,130 +14,119 @@ import {
 } from "@aws-sdk/client-ec2";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
-import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Container from "@cloudscape-design/components/container";
 import ContentLayout from "@cloudscape-design/components/content-layout";
+import Grid from "@cloudscape-design/components/grid";
 import Header from "@cloudscape-design/components/header";
 import Link from "@cloudscape-design/components/link";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Spinner from "@cloudscape-design/components/spinner";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
-import Table from "@cloudscape-design/components/table";
 
 import { useEmulator } from "@platform/EmulatorContext";
 import { useBreadcrumbs } from "@shell/BreadcrumbContext";
 import { CreateVpcModal } from "../create/CreateVpcModal";
-import { nameTag, useEc2Client } from "../useEc2Client";
+import { useEc2Client } from "../useEc2Client";
 
-interface VpcCount {
+interface ResourceCount {
   label: string;
-  count: number;
+  count: number | null;
   href: string;
 }
 
-interface VpcRow {
-  id: string;
-  name: string;
-  cidr: string;
-  state: string;
-  isDefault: boolean;
-}
-
 /**
- * VPC dashboard, modelled on the AWS console's "VPCs by Region" resource panel.
+ * VPC dashboard, modelled on the AWS console's "Resources by Region" panel.
  *
- * AWS also shows a DNS-resolution summary and a "Service health" panel fed by the AWS
- * Health API. LCS produces neither, so the health panel reports only what the emulator
- * can actually attest to — that the service is answering in this Region.
+ * Transcribed from the live AWS console on 2026-09-01. Three things that were wrong on the
+ * first pass and are corrected here: the panel is "Resources by Region", not "VPCs by
+ * Region"; each resource is a card in a two-column grid rather than a cell in one long
+ * count row; and there is no "Your VPCs" table on this page — AWS puts the VPC list behind
+ * the "VPCs" card.
+ *
+ * Not reproduced: AWS's per-card "See all regions" disclosure (LCS serves one Region at a
+ * time), and the right rail's Settings / Additional Information / Network Manager panels,
+ * which link to AWS features and documentation that have no LCS equivalent. Service health
+ * is kept, because LCS can actually answer it.
  */
 export default function VpcDashboardPage() {
   const navigate = useNavigate();
   const client = useEc2Client();
   const { region } = useEmulator();
-  const [counts, setCounts] = useState<VpcCount[] | null>(null);
-  const [vpcs, setVpcs] = useState<VpcRow[]>([]);
+  const [counts, setCounts] = useState<ResourceCount[] | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
   useBreadcrumbs([{ text: "VPC", href: "/vpc" }]);
 
   const load = useCallback(async () => {
-    const [
-      vpcResult,
-      subnets,
-      routeTables,
-      internetGateways,
-      natGateways,
-      endpoints,
-      acls,
-      groups,
-      addresses,
-    ] = await Promise.allSettled([
+    const results = await Promise.allSettled([
       client.send(new DescribeVpcsCommand({})),
       client.send(new DescribeSubnetsCommand({})),
       client.send(new DescribeRouteTablesCommand({})),
       client.send(new DescribeInternetGatewaysCommand({})),
-      client.send(new DescribeNatGatewaysCommand({})),
+      client.send(new DescribeAddressesCommand({})),
+      client.send(new DescribePrefixListsCommand({})),
       client.send(new DescribeVpcEndpointsCommand({})),
+      client.send(new DescribeNatGatewaysCommand({})),
       client.send(new DescribeNetworkAclsCommand({})),
       client.send(new DescribeSecurityGroupsCommand({})),
-      client.send(new DescribeAddressesCommand({})),
     ]);
 
-    // Every count is best-effort: one unsupported describe must not blank the dashboard.
-    const size = <T,>(result: PromiseSettledResult<T>, pick: (value: T) => unknown[]): number =>
-      result.status === "fulfilled" ? pick(result.value).length : 0;
+    // A count of null renders as an em dash, not a zero. "This Region has none" and "the
+    // emulator could not answer" are different facts and the dashboard must not conflate
+    // them — a silent zero is how a broken endpoint looks like an empty account.
+    const size = (index: number, pick: (value: never) => unknown[] | undefined): number | null => {
+      const result = results[index];
+      return result.status === "fulfilled" ? (pick(result.value as never) ?? []).length : null;
+    };
 
     setCounts([
-      { label: "VPCs", count: size(vpcResult, (v) => v.Vpcs ?? []), href: "/vpc/vpcs" },
-      { label: "Subnets", count: size(subnets, (v) => v.Subnets ?? []), href: "/vpc/subnets" },
+      { label: "VPCs", count: size(0, (v: { Vpcs?: unknown[] }) => v.Vpcs), href: "/vpc/vpcs" },
+      {
+        label: "Subnets",
+        count: size(1, (v: { Subnets?: unknown[] }) => v.Subnets),
+        href: "/vpc/subnets",
+      },
       {
         label: "Route tables",
-        count: size(routeTables, (v) => v.RouteTables ?? []),
+        count: size(2, (v: { RouteTables?: unknown[] }) => v.RouteTables),
         href: "/vpc/route-tables",
       },
       {
         label: "Internet gateways",
-        count: size(internetGateways, (v) => v.InternetGateways ?? []),
+        count: size(3, (v: { InternetGateways?: unknown[] }) => v.InternetGateways),
         href: "/vpc/internet-gateways",
       },
       {
-        label: "NAT gateways",
-        count: size(natGateways, (v) => v.NatGateways ?? []),
-        href: "/vpc/nat-gateways",
+        label: "Elastic IPs",
+        count: size(4, (v: { Addresses?: unknown[] }) => v.Addresses),
+        href: "/vpc/elastic-ips",
+      },
+      {
+        label: "Managed prefix lists",
+        count: size(5, (v: { PrefixLists?: unknown[] }) => v.PrefixLists),
+        href: "/vpc/managed-prefix-lists",
       },
       {
         label: "Endpoints",
-        count: size(endpoints, (v) => v.VpcEndpoints ?? []),
+        count: size(6, (v: { VpcEndpoints?: unknown[] }) => v.VpcEndpoints),
         href: "/vpc/endpoints",
       },
       {
+        label: "NAT gateways",
+        count: size(7, (v: { NatGateways?: unknown[] }) => v.NatGateways),
+        href: "/vpc/nat-gateways",
+      },
+      {
         label: "Network ACLs",
-        count: size(acls, (v) => v.NetworkAcls ?? []),
+        count: size(8, (v: { NetworkAcls?: unknown[] }) => v.NetworkAcls),
         href: "/vpc/network-acls",
       },
       {
         label: "Security groups",
-        count: size(groups, (v) => v.SecurityGroups ?? []),
+        count: size(9, (v: { SecurityGroups?: unknown[] }) => v.SecurityGroups),
         href: "/vpc/security-groups",
       },
-      {
-        label: "Elastic IPs",
-        count: size(addresses, (v) => v.Addresses ?? []),
-        href: "/vpc/elastic-ips",
-      },
     ]);
-
-    setVpcs(
-      vpcResult.status === "fulfilled"
-        ? (vpcResult.value.Vpcs ?? []).map((vpc) => ({
-            id: vpc.VpcId ?? "",
-            name: nameTag(vpc.Tags),
-            cidr: vpc.CidrBlock ?? "—",
-            state: vpc.State ?? "—",
-            isDefault: vpc.IsDefault === true,
-          }))
-        : [],
-    );
   }, [client]);
 
   useEffect(() => {
@@ -150,94 +140,90 @@ export default function VpcDashboardPage() {
 
   return (
     <ContentLayout header={<Header variant="h1">VPC Dashboard</Header>}>
-      <SpaceBetween size="l">
-        <Container
-          header={
-            <Header
-              variant="h2"
-              description={`You are using the following Amazon VPC resources in the ${region} Region:`}
-              actions={
-                <SpaceBetween direction="horizontal" size="xs">
-                  <Button iconName="refresh" ariaLabel="Refresh" onClick={() => void load()} />
-                  <Button variant="primary" onClick={() => setCreateOpen(true)}>
-                    Create VPC
-                  </Button>
-                </SpaceBetween>
-              }
-            >
-              VPCs by Region
-            </Header>
-          }
-        >
-          {counts === null ? (
-            <Box textAlign="center" padding={{ vertical: "l" }}>
-              <Spinner />
+      <Grid gridDefinition={[{ colspan: { default: 12, m: 8 } }, { colspan: { default: 12, m: 4 } }]}>
+        <SpaceBetween size="l">
+          {/*
+            AWS puts these above the resource panel rather than in its header, with the
+            Region note underneath, so a first-time visitor has a create path before they
+            have read anything.
+          */}
+          <SpaceBetween size="xxs">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create VPC
+              </Button>
+              <Button onClick={() => navigate("/ec2/instances")}>Launch EC2 Instances</Button>
+            </SpaceBetween>
+            <Box variant="small" color="text-body-secondary">
+              Note: Your instances will launch in the {region} Region.
             </Box>
-          ) : (
-            <ColumnLayout columns={5} variant="text-grid">
-              {counts.map((entry) => (
-                <SpaceBetween key={entry.label} size="xxs">
-                  <Link href={entry.href} onFollow={go(entry.href)}>
-                    {entry.label}
-                  </Link>
-                  <Box variant="awsui-value-large">{entry.count}</Box>
-                </SpaceBetween>
-              ))}
-            </ColumnLayout>
-          )}
-        </Container>
+          </SpaceBetween>
 
-        <Table
-          variant="container"
-          items={vpcs}
-          trackBy={(row) => row.id}
-          header={
-            <Header
-              variant="h2"
-              counter={`(${vpcs.length})`}
-              description="Every VPC in this Region, with its address range."
-            >
-              Your VPCs
-            </Header>
-          }
-          columnDefinitions={[
-            {
-              id: "id",
-              header: "VPC ID",
-              isRowHeader: true,
-              cell: (row) => (
-                <Link href={`/vpc/vpcs/${row.id}`} onFollow={go(`/vpc/vpcs/${row.id}`)}>
-                  {row.id}
-                </Link>
-              ),
-            },
-            { id: "name", header: "Name", cell: (row) => row.name },
-            { id: "cidr", header: "IPv4 CIDR", cell: (row) => row.cidr },
-            {
-              id: "state",
-              header: "State",
-              cell: (row) =>
-                row.state === "available" ? (
-                  <StatusIndicator type="success">Available</StatusIndicator>
-                ) : (
-                  <StatusIndicator type="pending">{row.state}</StatusIndicator>
-                ),
-            },
-            { id: "default", header: "Default VPC", cell: (row) => (row.isDefault ? "Yes" : "No") },
-          ]}
-          empty={
-            <Box textAlign="center" padding={{ vertical: "l" }}>
-              <SpaceBetween size="s">
-                <Box variant="strong">No VPCs</Box>
-                <Box variant="p" color="text-body-secondary">
-                  You do not have any VPCs in this Region.
-                </Box>
-                <Button onClick={() => setCreateOpen(true)}>Create VPC</Button>
-              </SpaceBetween>
-            </Box>
-          }
-        />
-      </SpaceBetween>
+          <Container
+            header={
+              <Header
+                variant="h2"
+                description="You are using the following Amazon VPC resources"
+                actions={
+                  <Button iconName="refresh" onClick={() => void load()}>
+                    Refresh Resources
+                  </Button>
+                }
+              >
+                Resources by Region
+              </Header>
+            }
+          >
+            {counts === null ? (
+              <Box textAlign="center" padding={{ vertical: "l" }}>
+                <Spinner />
+              </Box>
+            ) : (
+              <Grid
+                gridDefinition={counts.map(() => ({ colspan: { default: 12, xs: 6 } }))}
+              >
+                {counts.map((entry) => (
+                  <div key={entry.label}>
+                    <Container>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "baseline",
+                          justifyContent: "space-between",
+                          gap: "12px",
+                        }}
+                      >
+                        <Link href={entry.href} onFollow={go(entry.href)}>
+                          {entry.label}
+                        </Link>
+                        <Box color="text-body-secondary">
+                          {region}{" "}
+                          <Box variant="span" fontWeight="bold" color="text-status-info">
+                            {entry.count === null ? "—" : entry.count}
+                          </Box>
+                        </Box>
+                      </div>
+                    </Container>
+                  </div>
+                ))}
+              </Grid>
+            )}
+          </Container>
+        </SpaceBetween>
+
+        <Container header={<Header variant="h2">Service health</Header>}>
+          <SpaceBetween size="m">
+            <SpaceBetween size="xxs">
+              <Box variant="awsui-key-label">Region</Box>
+              <Box>{region}</Box>
+            </SpaceBetween>
+            <SpaceBetween size="xxs">
+              <Box variant="awsui-key-label">Status</Box>
+              <StatusIndicator type="success">This service is operating normally.</StatusIndicator>
+            </SpaceBetween>
+          </SpaceBetween>
+        </Container>
+      </Grid>
 
       <CreateVpcModal
         visible={createOpen}

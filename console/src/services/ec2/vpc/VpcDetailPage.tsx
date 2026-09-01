@@ -5,15 +5,18 @@ import {
   DeleteVpcCommand,
   DescribeFlowLogsCommand,
   DescribeInternetGatewaysCommand,
+  DescribeNatGatewaysCommand,
+  DescribeNetworkAclsCommand,
   DescribeRouteTablesCommand,
   DescribeSubnetsCommand,
   DescribeVpcAttributeCommand,
   DescribeVpcsCommand,
   ModifyVpcAttributeCommand,
 } from "@aws-sdk/client-ec2";
-import type { FlowLog, Vpc } from "@aws-sdk/client-ec2";
+import type { FlowLog, InternetGateway, NatGateway, RouteTable, Subnet, Vpc } from "@aws-sdk/client-ec2";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
+import ButtonDropdown from "@cloudscape-design/components/button-dropdown";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Container from "@cloudscape-design/components/container";
 import ContentLayout from "@cloudscape-design/components/content-layout";
@@ -32,6 +35,7 @@ import { useNotifications } from "@shell/NotificationContext";
 import { ConfirmDeleteModal } from "../ConfirmDeleteModal";
 import { ResourceLink } from "../resourceTable";
 import { nameTag, useEc2Client } from "../useEc2Client";
+import { VpcResourceMap } from "./VpcResourceMap";
 
 /** AWS renders an unset field as an em dash rather than omitting the row. */
 function value(input: string | number | boolean | undefined | null): string {
@@ -55,12 +59,36 @@ interface DnsAttributes {
   dnsHostnames: boolean;
 }
 
+interface Related {
+  subnets: Subnet[];
+  routeTables: RouteTable[];
+  internetGateways: InternetGateway[];
+  natGateways: NatGateway[];
+  mainNetworkAclId: string | null;
+}
+
+const NO_RELATED: Related = {
+  subnets: [],
+  routeTables: [],
+  internetGateways: [],
+  natGateways: [],
+  mainNetworkAclId: null,
+};
+
 /**
  * `/vpc/vpcs/:vpcId` — the detail view AWS opens when a VPC ID is clicked.
  *
- * AWS's version also carries a Resource map (an interactive topology diagram) and a CIDR
- * reservations tab. Neither is built: the resource map is a rendering of data already on
- * the other tabs, and LCS has no CIDR-reservation API to back the second.
+ * Structure transcribed from the live AWS console on 2026-09-01. Two corrections to the
+ * first pass, both about hierarchy rather than content:
+ *
+ * - **Details is a panel above the tabs, not a tab.** AWS shows sixteen fields there
+ *   permanently and starts you on Resource map.
+ * - **The header is `id / name` on one line**, and the only header control is an Actions
+ *   menu — Delete lives inside it rather than sitting beside it as its own button.
+ *
+ * AWS's tab set is Resource map, CIDRs, Flow logs, Tags, Related resources, Integrations.
+ * The last two are omitted: "Related resources" is a Resource Explorer view and
+ * "Integrations" lists AWS services LCS does not emulate, so both would always be empty.
  */
 export default function VpcDetailPage() {
   const { vpcId = "" } = useParams();
@@ -72,15 +100,13 @@ export default function VpcDetailPage() {
 
   const [vpc, setVpc] = useState<Vpc | null>(null);
   const [dns, setDns] = useState<DnsAttributes | null>(null);
-  const [subnetCount, setSubnetCount] = useState<number | null>(null);
-  const [routeTableCount, setRouteTableCount] = useState<number | null>(null);
-  const [internetGatewayId, setInternetGatewayId] = useState<string | null>(null);
+  const [related, setRelated] = useState<Related>(NO_RELATED);
   const [flowLogs, setFlowLogs] = useState<FlowLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingDns, setSavingDns] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const activeTab = searchParams.get("tab") ?? "details";
+  const activeTab = searchParams.get("tab") ?? "resource-map";
 
   useBreadcrumbs([
     { text: "VPC", href: "/vpc" },
@@ -101,21 +127,28 @@ export default function VpcDetailPage() {
       setLoading(false);
     }
 
-    const filters = [{ Name: "vpc-id", Values: [vpcId] }];
+    const inVpc = [{ Name: "vpc-id", Values: [vpcId] }];
     // Everything below is supporting detail. Each call is settled on its own so a service
     // that cannot answer leaves one field unknown rather than emptying the whole page.
-    const [support, hostnames, subnets, routeTables, gateways, logs] = await Promise.allSettled([
-      client.send(
-        new DescribeVpcAttributeCommand({ VpcId: vpcId, Attribute: "enableDnsSupport" }),
-      ),
-      client.send(
-        new DescribeVpcAttributeCommand({ VpcId: vpcId, Attribute: "enableDnsHostnames" }),
-      ),
-      client.send(new DescribeSubnetsCommand({ Filters: filters })),
-      client.send(new DescribeRouteTablesCommand({ Filters: filters })),
-      client.send(new DescribeInternetGatewaysCommand({ Filters: [{ Name: "attachment.vpc-id", Values: [vpcId] }] })),
-      client.send(new DescribeFlowLogsCommand({})),
-    ]);
+    const [support, hostnames, subnets, routeTables, gateways, nats, acls, logs] =
+      await Promise.allSettled([
+        client.send(
+          new DescribeVpcAttributeCommand({ VpcId: vpcId, Attribute: "enableDnsSupport" }),
+        ),
+        client.send(
+          new DescribeVpcAttributeCommand({ VpcId: vpcId, Attribute: "enableDnsHostnames" }),
+        ),
+        client.send(new DescribeSubnetsCommand({ Filters: inVpc })),
+        client.send(new DescribeRouteTablesCommand({ Filters: inVpc })),
+        client.send(
+          new DescribeInternetGatewaysCommand({
+            Filters: [{ Name: "attachment.vpc-id", Values: [vpcId] }],
+          }),
+        ),
+        client.send(new DescribeNatGatewaysCommand({ Filter: inVpc })),
+        client.send(new DescribeNetworkAclsCommand({ Filters: inVpc })),
+        client.send(new DescribeFlowLogsCommand({})),
+      ]);
 
     setDns(
       support.status === "fulfilled" && hostnames.status === "fulfilled"
@@ -125,15 +158,19 @@ export default function VpcDetailPage() {
           }
         : null,
     );
-    setSubnetCount(subnets.status === "fulfilled" ? (subnets.value.Subnets ?? []).length : null);
-    setRouteTableCount(
-      routeTables.status === "fulfilled" ? (routeTables.value.RouteTables ?? []).length : null,
-    );
-    setInternetGatewayId(
-      gateways.status === "fulfilled"
-        ? ((gateways.value.InternetGateways ?? [])[0]?.InternetGatewayId ?? null)
-        : null,
-    );
+
+    setRelated({
+      subnets: subnets.status === "fulfilled" ? (subnets.value.Subnets ?? []) : [],
+      routeTables: routeTables.status === "fulfilled" ? (routeTables.value.RouteTables ?? []) : [],
+      internetGateways:
+        gateways.status === "fulfilled" ? (gateways.value.InternetGateways ?? []) : [],
+      natGateways: nats.status === "fulfilled" ? (nats.value.NatGateways ?? []) : [],
+      mainNetworkAclId:
+        acls.status === "fulfilled"
+          ? ((acls.value.NetworkAcls ?? []).find((acl) => acl.IsDefault)?.NetworkAclId ?? null)
+          : null,
+    });
+
     // DescribeFlowLogs has no VPC filter in LCS, so the VPC's own logs are picked out here.
     setFlowLogs(
       logs.status === "fulfilled"
@@ -214,27 +251,42 @@ export default function VpcDetailPage() {
 
   const name = nameTag(vpc.Tags);
   const cidrAssociations = vpc.CidrBlockAssociationSet ?? [];
+  const mainRouteTable = related.routeTables.find((table) =>
+    (table.Associations ?? []).some((association) => association.Main),
+  );
 
   return (
     <ContentLayout
       header={
         <Header
           variant="h1"
-          description={name === "—" ? undefined : name}
           actions={
-            <SpaceBetween direction="horizontal" size="xs">
-              <Button iconName="refresh" ariaLabel="Refresh" onClick={() => void load()} />
-              <Button onClick={() => setDeleteOpen(true)}>Delete VPC</Button>
-            </SpaceBetween>
+            <ButtonDropdown
+              items={[
+                { id: "refresh", text: "Refresh" },
+                { id: "delete", text: "Delete VPC" },
+              ]}
+              onItemClick={(event) => {
+                if (event.detail.id === "delete") {
+                  setDeleteOpen(true);
+                } else {
+                  void load();
+                }
+              }}
+            >
+              Actions
+            </ButtonDropdown>
           }
         >
-          {vpcId}
+          {/* AWS titles this page "vpc-abc123 / my-vpc" — id, slash, Name tag. */}
+          {name === "—" ? vpcId : `${vpcId} / ${name}`}
         </Header>
       }
     >
       <SpaceBetween size="l">
-        <Container header={<Header variant="h2">VPC overview</Header>}>
+        <Container header={<Header variant="h2">Details</Header>}>
           <ColumnLayout columns={4} variant="text-grid">
+            {field("VPC ID", value(vpc.VpcId))}
             {field(
               "State",
               vpc.State === "available" ? (
@@ -243,31 +295,34 @@ export default function VpcDetailPage() {
                 <StatusIndicator type="pending">{value(vpc.State)}</StatusIndicator>
               ),
             )}
-            {field("IPv4 CIDR", value(vpc.CidrBlock))}
-            {field("Default VPC", vpc.IsDefault ? "Yes" : "No")}
+            {field("DNS hostnames", dns === null ? "—" : dns.dnsHostnames ? "Enabled" : "Disabled")}
+            {field("DNS resolution", dns === null ? "—" : dns.dnsSupport ? "Enabled" : "Disabled")}
             {field("Tenancy", value(vpc.InstanceTenancy))}
+            {field("DHCP option set", value(vpc.DhcpOptionsId))}
+            {field(
+              "Main route table",
+              mainRouteTable?.RouteTableId ? (
+                <ResourceLink href="/vpc/route-tables">{mainRouteTable.RouteTableId}</ResourceLink>
+              ) : (
+                "—"
+              ),
+            )}
+            {field(
+              "Main network ACL",
+              related.mainNetworkAclId ? (
+                <ResourceLink href="/vpc/network-acls">{related.mainNetworkAclId}</ResourceLink>
+              ) : (
+                "—"
+              ),
+            )}
+            {field("Default VPC", vpc.IsDefault ? "Yes" : "No")}
+            {field("IPv4 CIDR", value(vpc.CidrBlock))}
             {field(
               "Subnets",
-              subnetCount === null ? (
-                "—"
+              related.subnets.length === 0 ? (
+                "0"
               ) : (
-                <ResourceLink href="/vpc/subnets">{`${subnetCount}`}</ResourceLink>
-              ),
-            )}
-            {field(
-              "Route tables",
-              routeTableCount === null ? (
-                "—"
-              ) : (
-                <ResourceLink href="/vpc/route-tables">{`${routeTableCount}`}</ResourceLink>
-              ),
-            )}
-            {field(
-              "Internet gateway",
-              internetGatewayId === null ? (
-                "—"
-              ) : (
-                <ResourceLink href="/vpc/internet-gateways">{internetGatewayId}</ResourceLink>
+                <ResourceLink href="/vpc/subnets">{`${related.subnets.length}`}</ResourceLink>
               ),
             )}
             {field("Owner ID", value(vpc.OwnerId ?? effectiveAccountId))}
@@ -279,39 +334,16 @@ export default function VpcDetailPage() {
           onChange={(event) => setSearchParams({ tab: event.detail.activeTabId })}
           tabs={[
             {
-              id: "details",
-              label: "Details",
+              id: "resource-map",
+              label: "Resource map",
               content: (
-                <Container header={<Header variant="h2">DNS settings</Header>}>
-                  {dns === null ? (
-                    <Box variant="p" color="text-body-secondary">
-                      DNS attributes are unavailable for this VPC.
-                    </Box>
-                  ) : (
-                    <SpaceBetween size="m">
-                      <Toggle
-                        checked={dns.dnsSupport}
-                        disabled={savingDns}
-                        onChange={(event) =>
-                          void setDnsAttribute("dnsSupport", event.detail.checked)
-                        }
-                        description="Resolves DNS for instances in the VPC using the Amazon-provided resolver."
-                      >
-                        DNS resolution
-                      </Toggle>
-                      <Toggle
-                        checked={dns.dnsHostnames}
-                        disabled={savingDns}
-                        onChange={(event) =>
-                          void setDnsAttribute("dnsHostnames", event.detail.checked)
-                        }
-                        description="Gives instances launched into the VPC a public DNS hostname."
-                      >
-                        DNS hostnames
-                      </Toggle>
-                    </SpaceBetween>
-                  )}
-                </Container>
+                <VpcResourceMap
+                  vpcName={name === "—" ? vpcId : name}
+                  subnets={related.subnets}
+                  routeTables={related.routeTables}
+                  internetGateways={related.internetGateways}
+                  natGateways={related.natGateways}
+                />
               ),
             },
             {
@@ -408,6 +440,42 @@ export default function VpcDetailPage() {
                     </Box>
                   }
                 />
+              ),
+            },
+            {
+              id: "dns",
+              label: "DNS settings",
+              content: (
+                <Container header={<Header variant="h2">DNS settings</Header>}>
+                  {dns === null ? (
+                    <Box variant="p" color="text-body-secondary">
+                      DNS attributes are unavailable for this VPC.
+                    </Box>
+                  ) : (
+                    <SpaceBetween size="m">
+                      <Toggle
+                        checked={dns.dnsSupport}
+                        disabled={savingDns}
+                        onChange={(event) =>
+                          void setDnsAttribute("dnsSupport", event.detail.checked)
+                        }
+                        description="Resolves DNS for instances in the VPC using the Amazon-provided resolver."
+                      >
+                        DNS resolution
+                      </Toggle>
+                      <Toggle
+                        checked={dns.dnsHostnames}
+                        disabled={savingDns}
+                        onChange={(event) =>
+                          void setDnsAttribute("dnsHostnames", event.detail.checked)
+                        }
+                        description="Gives instances launched into the VPC a public DNS hostname."
+                      >
+                        DNS hostnames
+                      </Toggle>
+                    </SpaceBetween>
+                  )}
+                </Container>
               ),
             },
             {

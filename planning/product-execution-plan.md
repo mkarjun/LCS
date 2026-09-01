@@ -1114,8 +1114,11 @@ Ordered by what blocks a release, not by size.
    have no per-service flow, and nothing runs against a real LCS container. The VPC specs
    stub the Query endpoint with the handler's own element names, so they do pin the wire
    format from the SDK side — but against a fixture, not a container.
-5. **AWS side-by-side parity evidence** — still not captured for any service, so
-   `aws-console-parity.md`'s bar is unmet by its own definition. Needs manual screenshots.
+5. **AWS side-by-side parity evidence** — captured for **VPC** on 2026-09-01 against the
+   maintainer's live console, and recorded in `aws-console-parity.md`. It found four
+   structural errors in a console that had already passed its own tests, which is the
+   argument for doing this per service rather than trusting the build. Still uncaptured
+   for the other ten built services, so the rubric's bar remains unmet overall.
 
 ### Session 2026-07-31 — EC2/IAM/Lambda depth, CloudShell, shell polish
 
@@ -1200,6 +1203,14 @@ Two things worth carrying forward:
   association count and never the entry counts its own name promised. Found only by
   breaking it. **Write the assertion the test name claims, then break it once.**
 
+**The AWS side-by-side pass found four structural errors in a console that had already
+passed 35 tests.** Panel named "VPCs by Region" instead of "Resources by Region"; a VPC
+table on the dashboard that AWS does not have; Endpoints filed under "Virtual private
+cloud" when AWS moved them to "PrivateLink and Lattice"; and a "Network Analysis" section
+AWS no longer has at all. Every one was invisible to tests written against my own design.
+**Tests prove the console does what you told it to. Only the side-by-side proves you told
+it the right thing.** All four are fixed; the evidence is in `aws-console-parity.md`.
+
 **`planning/ec2-domain-coverage.md` was wrong about five rows.** NAT gateways, network
 ACLs, VPC endpoints, flow logs, and prefix lists were all recorded *Op unsupported*; the
 handler implements every one. The doc's own STALE banner predicted this — the upstream
@@ -1224,6 +1235,13 @@ user reaches for them, weighted by how much backend there is to surface:
 ECS + ECR is the strongest candidate immediately behind these, and moves up if the
 container story becomes the priority — it is heavier (needs the Docker socket) and worth
 its own wave rather than a slot in this one.
+
+**All four were walked in the live AWS console on 2026-09-01** and their nav, table
+columns, and header controls are written down in `aws-console-parity.md`. Start each build
+from that, not from memory. The single most useful thing it turned up: **EventBridge is one
+console over three of our service ids** (`events`, `scheduler`, `pipes`) — the same
+one-console-many-ids shape as VPC/EC2, so build it as one module with three route trees
+rather than three placeholder pages that each look half-finished.
 
 Standing caveat, unchanged: Track A ("prove what exists") still gates a public release.
 Widening the console does not close open items 2–5 below, and this session did not touch

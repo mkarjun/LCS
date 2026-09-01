@@ -450,9 +450,18 @@ export const EC2_API_RESOURCES: Record<string, ResourceDefinition> = {
       { id: "name", header: "Name", cell: (row) => nameTag(row.Tags), isRowHeader: true, sortingComparator: byText((row) => nameTag(row.Tags)) },
       { id: "id", header: "VPC ID", cell: (row) => row.VpcId ?? "-", sortingComparator: byText((row) => row.VpcId) },
       { id: "state", header: "State", cell: (row) => row.State ?? "-", sortingComparator: byText((row) => row.State) },
+      // Column set follows the live AWS console (2026-09-01): Name, VPC ID, State, IPv4
+      // CIDR, IPv6 CIDR, DHCP option set. Tenancy is not one of AWS's columns — it is on
+      // the detail page — so it is not one of ours. Encryption controls and Block Public
+      // Access are AWS columns LCS has no API for, and are left out rather than stubbed.
       { id: "cidr", header: "IPv4 CIDR", cell: (row) => row.CidrBlock ?? "-", sortingComparator: byText((row) => row.CidrBlock) },
+      {
+        id: "ipv6",
+        header: "IPv6 CIDR",
+        cell: (row) => (row.Ipv6CidrBlockAssociationSet ?? [])[0]?.Ipv6CidrBlock ?? "—",
+      },
+      { id: "dhcp", header: "DHCP option set", cell: (row) => row.DhcpOptionsId ?? "—" },
       { id: "default", header: "Default VPC", cell: (row) => (row.IsDefault ? "Yes" : "No") },
-      { id: "tenancy", header: "Tenancy", cell: (row) => row.InstanceTenancy ?? "-" },
     ],
   },
   subnets: {

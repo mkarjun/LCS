@@ -186,6 +186,7 @@ export function ResourceTablePage({ definition, resourceKey }: ResourceTablePage
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [filterText, setFilterText] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[1]);
@@ -204,6 +205,7 @@ export function ResourceTablePage({ definition, resourceKey }: ResourceTablePage
     try {
       setRows(await definition.load(clients));
       setFailed(false);
+      setLoadedAt(new Date());
     } catch (cause) {
       const { title, detail } = describeAwsError(cause);
       setFailed(true);
@@ -279,7 +281,17 @@ export function ResourceTablePage({ definition, resourceKey }: ResourceTablePage
             counter={loading ? undefined : `(${rows.length})`}
             description={definition.description}
             actions={
-              <SpaceBetween direction="horizontal" size="xs">
+              <SpaceBetween direction="horizontal" size="xs" alignItems="center">
+                {/* AWS stamps its inventory tables with when the data was last read, to
+                    the left of the refresh control. Without it a stale table and a fresh
+                    empty one look identical. */}
+                {loadedAt !== null && (
+                  <Box variant="small" color="text-body-secondary" textAlign="right">
+                    Last updated
+                    <br />
+                    {loadedAt.toLocaleTimeString()}
+                  </Box>
+                )}
                 <Button iconName="refresh" ariaLabel="Refresh" onClick={() => void load()} />
                 {actions.length > 0 && (
                   <ButtonDropdown

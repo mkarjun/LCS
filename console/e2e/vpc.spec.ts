@@ -215,19 +215,30 @@ test("the VPC console is reachable from the service catalog", async ({ page }) =
   await expect(page).toHaveURL(/\/_lcs\/ui\/vpc$/);
 });
 
-test("the dashboard counts resources and lists the VPCs", async ({ page }) => {
+test("the dashboard shows a Resources by Region card per resource", async ({ page }) => {
   await stubEc2(page);
   await page.goto("./vpc");
 
-  // The count sits directly under its label, so the tile's whole text is label + count.
-  const vpcTile = page
+  // AWS names this panel "Resources by Region", not "VPCs by Region" — it counts every
+  // VPC-domain resource, not just VPCs.
+  await expect(page.getByRole("heading", { name: "Resources by Region" })).toBeVisible();
+
+  // Each resource is its own card: a link, the Region, and the count.
+  const vpcCard = page
     .locator("div")
     .filter({ has: page.getByRole("link", { name: "VPCs", exact: true }) })
-    .filter({ hasText: /^VPCs1$/ });
-  await expect(vpcTile.first()).toBeVisible();
+    .filter({ hasText: /^VPCsus-east-1 ?1$/ });
+  await expect(vpcCard.first()).toBeVisible();
 
-  await expect(page.getByRole("link", { name: "vpc-0e2e0001" })).toBeVisible();
-  await expect(page.getByText("10.0.0.0/16").first()).toBeVisible();
+  // A resource with none in this Region still gets a card, reading zero. Matched on the
+  // card's whole text, because "Subnets" is also a left-nav link.
+  const subnetCard = page.locator("div").filter({ hasText: /^Subnetsus-east-1 ?0$/ });
+  await expect(subnetCard.first()).toBeVisible();
+
+  // AWS has no VPC table on this page — the list lives behind the VPCs card.
+  await expect(page.getByRole("link", { name: "vpc-0e2e0001" })).toHaveCount(0);
+  await page.getByRole("link", { name: "VPCs", exact: true }).click();
+  await expect(page).toHaveURL(/\/vpc\/vpcs$/);
 });
 
 test("the left navigation greys the entries LCS cannot back", async ({ page }) => {
@@ -299,9 +310,19 @@ test("a VPC id opens the detail page with its CIDR and DNS settings", async ({ p
 
   await page.getByRole("link", { name: "vpc-0e2e0001" }).click();
 
-  await expect(page.getByRole("heading", { name: "vpc-0e2e0001" })).toBeVisible();
-  await expect(page.getByText("primary-vpc")).toBeVisible();
-  await expect(page.getByRole("tab", { name: "CIDRs" })).toBeVisible();
+  // AWS titles the page "id / Name tag" on one line.
+  await expect(
+    page.getByRole("heading", { name: "vpc-0e2e0001 / primary-vpc" }),
+  ).toBeVisible();
+
+  // Details is a panel above the tabs, not a tab, and Resource map is the default tab.
+  await expect(page.getByRole("heading", { name: "Details" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Details" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Resource map" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByRole("heading", { name: "Subnets (0)" })).toBeVisible();
 
   await page.getByRole("tab", { name: "CIDRs" }).click();
   await expect(page.getByRole("row", { name: /vpc-cidr-assoc-0e2e/ })).toContainText("associated");
