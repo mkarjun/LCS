@@ -111,3 +111,27 @@ retrieved (UTC) · Created on (UTC). No container border around the table.
 Two patterns worth carrying into all four: AWS stamps inventory tables with **"Last
 updated / N ago"** beside the refresh control (now added to the shared LCS table), and
 every column header carries its own **sort/filter caret**.
+
+### What the backend can actually serve for those four
+
+Read from the handlers on 2026-09-01, so each console is scoped to what exists rather than
+to what AWS shows. This is the check that should precede every build — for VPC it turned
+up five actions the coverage doc had written off.
+
+| Service | Handler | Coverage |
+|---|---|---|
+| **API Gateway v1** | `apigateway/*Controller` (REST paths, not actions) | `/restapis` + `{apiId}` and nested `authorizers`, `deployments`, `models`, `requestvalidators`, `stages`, `resources`; plus `/apikeys`, `/domainnames`, `/account`. Also serves `_aws/execute-api/{apiId}/{stage}` — deployed APIs are actually callable. |
+| **API Gateway v2** | `ApiGatewayV2JsonHandler` | Full CRUD across Api, Route, Integration, IntegrationResponse, RouteResponse, Stage, Deployment, Authorizer, Model, plus tags. Deep enough for a real console. |
+| **EventBridge** | `EventBridgeHandler` | Buses, Rules (Put/Delete/Enable/Disable), Targets, Archives, Replays, `PutEvents`, `TestEventPattern`, permissions, tags. Everything the Buses section of AWS's nav needs. |
+| **Scheduler** | `scheduler/SchedulerController` + `ScheduleDispatcher` | Its own service with a real dispatcher and cron/rate expression parser — not a stub. |
+| **Pipes** | `pipes/PipesController` + `PipesPoller` | Its own service with a poller, filter matcher, and target invoker. |
+| **Step Functions** | `StepFunctionsJsonHandler` | State machines incl. versions, executions, **`GetExecutionHistory`**, activities, `SendTaskSuccess`/`Failure`/`Heartbeat`, `ValidateStateMachineDefinition`. The history call is what makes a real execution view possible. |
+| **Secrets Manager** | `SecretsManagerJsonHandler` | Full lifecycle: create/update/delete/restore, versions and version stages, `GetSecretValue`, `BatchGetSecretValue`, resource policies, rotation, `GetRandomPassword`. |
+
+All four are deep enough that the console is the limiting factor, not the emulator.
+
+One consequence for EventBridge: `events`, `scheduler`, and `pipes` are three separate
+handlers, but AWS presents them as **one console** — Buses, Pipes, and Scheduler are
+sections of the same left nav. Build it the way VPC was built: one module, three route
+trees, registered under three catalog paths. `CatalogEntry.emulatorId` already exists for
+exactly this.

@@ -1101,10 +1101,38 @@ Ordered by what blocks a release, not by size.
    WSL2 VHDX does not shrink on its own — reclaiming the rest needs `wsl --shutdown`
    followed by a VHDX compact, which stops every running container on the machine, so it is
    a maintainer decision. A full disk makes Maven fail in ways that look like code errors.
-2. **Run the five unrun compatibility suites** (Python, AWS CLI, Go, Rust, Java). Only Node
-   has ever been run, and not since any of the emulator fixes. This is the single largest
-   unknown in the project: five of six suites have never been green on this branch.
-   *Nothing should be announced publicly before this passes.*
+2. ~~**Run the five unrun compatibility suites.**~~ **Done 2026-09-02** — all eight run
+   locally against an image built from the tip of `main`, via the new
+   `compatibility-tests/run-local.sh`. Five green, one real bug, two environment failures:
+
+   | Suite | Result |
+   |---|---|
+   | Node | PASS 454/454 |
+   | Python | PASS 311 |
+   | Go | PASS 193 |
+   | AWS CLI | PASS |
+   | Terraform | PASS |
+   | Java | **FAIL** — 1412 run, 1 failure + 4 errors, all AppSync (below) |
+   | CDK | FAIL — harness only, see below |
+   | OpenTofu | Image build failed — `ghcr.io/opentofu/opentofu:1.8` pull denied |
+
+   **The one real bug: AppSync `CreateChannelNamespace` returns 409
+   ConcurrentModification.** `AppSyncService.assertNoSchemaBusyAnywhere()` blocks *every*
+   account-wide operation while *any* API in the account has a schema creation in
+   PROCESSING, and `SchemaCreationWorker` runs those asynchronously on 4 threads. So an
+   earlier test's in-flight schema creation blocks an unrelated Event API operation. AWS
+   does not scope the guard that widely. The other four AppSync errors are cascade — with
+   no namespace created, the SDK refuses to marshal `name=null` client-side.
+
+   **CDK is a Docker Desktop limitation, not a defect.** CDK's `DockerImageFunction` does
+   `docker push` to `000000000000.dkr.ecr.us-east-1.localhost:5100`. The push runs on the
+   *host* daemon, and on Docker Desktop for Windows that `.localhost` name does not
+   resolve. The emulated registry itself answered correctly throughout. Expect this to
+   pass on the Linux runners CI uses.
+
+   Still to do: re-run against a **native** image (CI tests native; this was the JVM image
+   from `docker/Dockerfile`), and add `push: branches: [main]` to the workflow so this
+   stops being a manual act.
 3. **Sweep for remaining Query-protocol member-name defects** across all 70 services (see
    the wire-format section above). Four have been found by accident; there is no reason to
    think that is all of them.

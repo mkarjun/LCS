@@ -134,3 +134,37 @@ docker run --rm -e FLOCI_ENDPOINT=http://host.docker.internal:4566 floci-sdk-pyt
 ## Exit Codes
 
 All test runners exit `0` on full pass and non-zero if any test fails — suitable for CI pipelines.
+
+## Running the suites locally
+
+```bash
+./run-local.sh lcs:compat                 # all eight
+./run-local.sh lcs:compat sdk-test-node   # one
+```
+
+Build the image first: `docker build -f ../docker/Dockerfile -t lcs:compat ..`
+
+This exists because `.github/workflows/compatibility.yml` triggers only on
+`pull_request` with path filters — work pushed straight to `main` never runs it. Use this
+to get a green run against the tip of main before a release.
+
+Findings from the first full local run (2026-09-02) worth knowing before you start:
+
+- **`sdk-test-java` needs a public DNS resolver.** The test container takes the emulator's
+  embedded DNS so `*.floci` wildcard subdomains resolve, but that DNS only answers for its
+  own names. The image pre-fetches with `dependency:go-offline`, yet Surefire resolves its
+  *own plugin* dependencies when the test goal runs and reaches for Maven Central
+  mid-suite. `run-local.sh` adds a fallback resolver; without it the suite dies with
+  "Unknown host repo.maven.apache.org" and looks like a product failure.
+- **`compat-cdk` cannot pass on Docker Desktop.** CDK pushes a container asset to
+  `<account>.dkr.ecr.<region>.localhost:5100`. That push runs on the host daemon, and the
+  `.localhost` name does not resolve there on Windows or macOS. Linux CI is fine.
+- **One Node test sits close to its timeout.** `S3 > should multipart copy object with
+  non-ASCII key` took 54s against a 60s limit, and failed outright at 90s on a loaded
+  machine. It is not slow in isolation — the same sequence runs in ~600ms from inside a
+  container on the same network, and ~180ms from the host. The cost is contention from
+  Vitest running 34 files in parallel while Neptune, DocDB, RDS and ECR tests each launch
+  real containers. Treat a failure there as suite load, not as an S3 defect, but it is
+  worth raising that test's timeout.
+- Each suite writes `/results/junit.xml`, so `run-local.sh` gives each its own results
+  directory. Sharing one silently leaves you with only the last suite's report.
